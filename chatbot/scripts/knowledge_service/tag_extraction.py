@@ -3,6 +3,7 @@ import openai
 import json
 import re
 from typing import List, Dict, Any
+import os
 
 def extract_tags_from_google_doc(doc_url: str, openai_api_key: str, max_tags: int = 15) -> List[str]:
     """
@@ -164,7 +165,7 @@ def get_tags_from_google_doc(doc_url: str, api_key: str) -> List[str]:
 if __name__ == "__main__":
     # Example Google Docs URL (replace with your actual document)
     google_doc_url = "https://docs.google.com/document/d/1xZbZpByp-TeysQR7M8PzqidtoaJIWxcy/edit?tab=t.0"
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+    openai_key = os.getenv("OPENAI_API_KEY")
     # Extract tags
     tags = get_tags_from_google_doc(google_doc_url, openai_key)
     
