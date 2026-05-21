@@ -143,6 +143,12 @@ class CommonResponseHandler(BaseResponseHandler):
         if super().is_function_call(response):
             return True
 
+        # JSON response tools (e.g. process_user_input) are not state machine calls
+        if isinstance(response, dict) and 'function_call' in response:
+            fc_name = response['function_call'].get('name', '')
+            if fc_name and fc_name != 'get_state_information':
+                return False
+
         # Check for OpenAI Responses API function call format
         if isinstance(response, dict):
             if response.get('finish_reason') == 'function_call' and 'function_call' in response:
@@ -213,6 +219,12 @@ class CommonResponseHandler(BaseResponseHandler):
         print(f"DEBUG: kwargs keys: {list(kwargs.keys())}")
         print(f"DEBUG: streaming_completed in kwargs: {'streaming_completed' in kwargs}")
         print(f"DEBUG: streaming_completed value: {kwargs.get('streaming_completed', 'NOT SET')}")
+
+        # JSON response tool calls (e.g. process_user_input) — extract args and send message directly
+        if isinstance(response, dict) and 'function_call' in response:
+            fc_name = response.get('function_call', {}).get('name', '')
+            if fc_name and fc_name != 'get_state_information':
+                return self._handle_json_tool_response(response, chat_session, chunks, **kwargs)
 
         retry_attempt = kwargs.get('retry_attempt', 0)
         print(f"DEBUG: Current retry attempt: {retry_attempt}")
@@ -711,12 +723,11 @@ class CommonResponseHandler(BaseResponseHandler):
     def _handle_response_extra_content(self, response, company_bot):
         extra_content = None
         if company_bot.bot_type == CompanyBotTypeChoices.SIMPLE:
-            if company_bot.provider == LLMProvider.BEDROCK_CONVERSE:
-                if response and isinstance(response, dict):
-                    extracted_data = response.pop("parameters", response.pop("input", None))
-                    if extracted_data and isinstance(extracted_data, dict):
-                        response.clear()
-                        response.update(extracted_data)
+            if response and isinstance(response, dict):
+                extracted_data = response.pop("parameters", response.pop("input", None))
+                if extracted_data and isinstance(extracted_data, dict):
+                    response.clear()
+                    response.update(extracted_data)
 
         print("Updated response post clean: ", response)
         logger.info(f"Updated response post clean: {response}")
@@ -744,6 +755,23 @@ class CommonResponseHandler(BaseResponseHandler):
             response = message
 
         return response, extra_content
+
+    def _handle_json_tool_response(self, response, chat_session, chunks, **kwargs):
+        """Handle tool calls where the arguments ARE the response (e.g. process_user_input)."""
+        arguments = response['function_call'].get('arguments', {})
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                arguments = repair_json(arguments, return_objects=True)
+
+        return self._handle_regular_response(
+            response=arguments,
+            chat_session=chat_session,
+            chunks=chunks,
+            current_step=chat_session.current_step,
+            **kwargs
+        )
 
     def _handle_freeflow_function_call(self, response, chat_session, chunks, **kwargs):
         """Handle function calls for FREE_FLOW bots (like download_file)"""

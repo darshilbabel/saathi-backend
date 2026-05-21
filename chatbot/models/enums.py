@@ -41,8 +41,8 @@ class LLMProvider(models.TextChoices):
     Determines which AI backend service is used.
     """
     BEDROCK = 'bedrock', _('BEDROCK')
-    BEDROCK_CONVERSE = 'bedrock/converse', _('BEDROCK_CONVERSE')
     OPENAI = 'openai', _('OPENAI')
+    ANTHROPIC = 'anthropic', _('ANTHROPIC')
 
 
 class ThemeType(models.TextChoices):
@@ -79,6 +79,15 @@ class LLMModel(models.TextChoices):
     GPT5_2 = 'gpt-5.2', _('GPT_5_2')
     GPT5_2_PRO = 'gpt-5.2-pro', _('GPT_5_2_PRO')
     GPT5_MINI = 'gpt-5-mini', _('GPT_5_MINI')
+    CLAUDE_3_HAIKU = 'claude-3-haiku-20240307', _('Claude 3 Haiku')
+    CLAUDE_3_SONNET = 'claude-3-sonnet-20240229', _('Claude 3 Sonnet')
+    CLAUDE_3_OPUS = 'claude-3-opus-20240229', _('Claude 3 Opus')
+    CLAUDE_3_5_SONNET = 'claude-3-5-sonnet-20241022', _('Claude 3.5 Sonnet')
+    CLAUDE_3_5_HAIKU = 'claude-3-5-haiku-20241022', _('Claude 3.5 Haiku')
+    CLAUDE_3_7_SONNET = 'claude-3-7-sonnet-20250219', _('Claude 3.7 Sonnet')
+    CLAUDE_HAIKU_4_5 = 'claude-haiku-4-5', _('Claude Haiku 4.5')
+    CLAUDE_SONNET_4_5 = 'claude-sonnet-4-5', _('Claude Sonnet 4.5')
+    CLAUDE_OPUS_4_5 = 'claude-opus-4-5', _('Claude Opus 4.5')
 
 
 class EntityStatus(models.TextChoices):

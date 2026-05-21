@@ -112,13 +112,7 @@ def format_message_as_per_bedrock_format(chats, intro=None, other_info=None):
 
 
 def get_guided_chat(company_bot, company_chats, intro=None, other_info=None):
-    messages = []
-    if company_bot.provider == LLMProvider.BEDROCK_CONVERSE:
-        messages = format_message_as_per_bedrock_format(chats=company_chats, intro=intro, other_info=other_info)
-    elif company_bot.provider == LLMProvider.OPENAI:
-        messages = format_message_as_per_openai_format(chats=company_chats, intro=intro)
-
-    return messages
+    return format_message_as_per_openai_format(chats=company_chats, intro=intro)
 
 
 def convert_llama_to_openai_tool(llama_tool_call):

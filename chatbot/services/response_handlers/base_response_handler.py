@@ -3,8 +3,8 @@ from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 from chatbot.celery_tasks.common_chat_tasks import save_in_company_db
 from chatbot.celery_tasks.handle_message import translate_and_send_message
-from chatbot.llm_models.llm_script import handle_bedrock_model, handle_openai_response_api
-from chatbot.models import ChatSession, ChatStatus, LLMProvider, CompanyBotTypeChoices
+from chatbot.llm_models.llm_gateway import build_gateway_params, call_llm_gateway, call_llm_gateway_stream
+from chatbot.models import ChatSession, ChatStatus, CompanyBotTypeChoices
 from chatbot.models.company_models import CompanyStateMachine
 from chatbot.models.enums import OperationTypeChoices, PreProcessOutputMode
 from chatbot.services.postprocessing.postprocessing_service import PostprocessingService
@@ -261,7 +261,7 @@ class BaseResponseHandler(ABC):
         system_prompt = kwargs['system_prompt']
         response = None
         message_to_send = self.get_messages_for_llm(**kwargs)
-        print("message_to_send: ", message_to_send)
+
         session_id = kwargs['session_id']
         profile_id = kwargs.get('profile_id')
         channel_name = kwargs['channel_name']
@@ -306,167 +306,198 @@ class BaseResponseHandler(ABC):
                 logger.error(f"Failed to parse state machine tool_context: {e}")
                 tools = None
 
-        if company_bot.provider == LLMProvider.BEDROCK_CONVERSE:
-            try:
-                response = handle_bedrock_model(
-                    system_prompt=system_prompt,
-                    messages=message_to_send,
-                    model_name=company_bot.llm_model,
-                    temperature=company_bot.bot_temperature,
-                    max_token=company_bot.max_token,
-                    company_bot=company_bot,
-                    tools=tools
-                )
-            except Exception as e:
-                logger.error(f"Bedrock Error: %s", e)
-                response = None
+        result = self._handle_gateway_response(
+            system_prompt=system_prompt, messages=message_to_send, company_bot=company_bot,
+            session_id=session_id, profile_id=profile_id, tools=tools, channel_name=channel_name,
+        )
 
-        elif company_bot.provider == LLMProvider.OPENAI:
-            use_streaming = self.should_use_streaming(company_bot)
+        if result is None or (isinstance(result, tuple) and result[0] is None):
+            logger.error("LLM gateway response returned None")
+            return None, None, None
 
-            logger.info(f"Using OpenAI {'streaming' if use_streaming else 'non-streaming'} for session {session_id}")
+        response, extra_content, finish_reason = result
+        return response, extra_content, finish_reason
 
-            result = self._handle_openai_response(
-                system_prompt=system_prompt,
-                messages=message_to_send,
-                company_bot=company_bot,
-                channel_name=channel_name,
-                session_id=session_id,
-                profile_id=profile_id,
-                stream=use_streaming
+
+    def _handle_gateway_response(
+        self, system_prompt, messages, company_bot, session_id, profile_id, tools=None, channel_name=None,
+    ):
+        tool_choice = None
+        if isinstance(tools, dict):
+            tool_choice = tools.get('tool_choice', 'auto')
+            tools = tools.get('tools') or tools.get('tool')
+        elif isinstance(tools, list):
+            tool_choice = 'auto'
+
+        gateway_messages = []
+        if system_prompt:
+            gateway_messages.append({'role': 'system', 'content': system_prompt})
+        gateway_messages += messages
+
+        other = company_bot.other_params or {}
+        cache_policy = other.get('cache_policy')
+        metadata = other.get('metadata')
+        use_stream = self.should_use_streaming(company_bot) and channel_name
+
+        if use_stream:
+            result = self._handle_gateway_stream(
+                gateway_messages=gateway_messages, company_bot=company_bot,
+                session_id=session_id, profile_id=profile_id, tools=tools,
+                tool_choice=tool_choice, channel_name=channel_name,
+                cache_policy=cache_policy, metadata=metadata,
+            )
+        else:
+            result = self._call_gateway_non_stream(
+                gateway_messages=gateway_messages, company_bot=company_bot,
+                session_id=session_id, profile_id=profile_id,
+                tools=tools, tool_choice=tool_choice,
             )
 
-            if result is None or (isinstance(result, tuple) and result[0] is None):
-                logger.error("OpenAI response returned None - error occurred")
-                response = None
-            elif isinstance(result, tuple):
-                response, extra_content, finish_reason = result
+        print("Result found: ", result)
 
-                if extra_content:
-                    print("Setting extra_content to ", extra_content)
-                    kwargs['llm_extra_content'] = extra_content
+        if not result or (isinstance(result, tuple) and result[0] is None):
+            return None, None, None
 
-                return response, extra_content, finish_reason
-            else:
-                response = result
-        return response, None, None
+        response_data, extra, finish = result
 
-    def _handle_openai_response(self, system_prompt, messages, company_bot,
-                                channel_name, session_id, profile_id, stream=False):
-        """
-        Handle OpenAI response using handle_openai_response_api.
-        Works for both streaming and non-streaming modes.
-        Supports both file_search and function calling tools.
-        """
-        final_extra_content = None
-        function_call_result = None
+        if (getattr(company_bot, 'use_vector_service', False) and isinstance(response_data, dict) and
+                response_data.get('function_call', {}).get('name') == 'search_knowledge_base'):
+            query = response_data['function_call'].get('arguments', {}).get('query', '')
+            return self._handle_vector_search(
+                query=query, system_prompt=system_prompt, messages=messages,
+                company_bot=company_bot, tools=tools, session_id=session_id,
+                profile_id=profile_id, channel_name=channel_name,
+                cache_policy=cache_policy, metadata=metadata, use_stream=use_stream,
+            )
 
+        return response_data, extra, finish
+
+    def _call_gateway_non_stream(
+        self, gateway_messages, company_bot, session_id, profile_id, tools, tool_choice,
+        retrieved_chunks=None,
+    ):
+        """Single non-streaming LLM call, returns (response, extra, finish_reason)."""
+        import json
         try:
-            logger.info(f"Processing free-flow for session {session_id}, channel {channel_name}")
+            data = call_llm_gateway(
+                messages=gateway_messages, provider=company_bot.provider, model=company_bot.llm_model,
+                params=build_gateway_params(company_bot), tools=tools, tool_choice=tool_choice,
+            )
+            if not data:
+                return None, None, None
 
-            tools = None
-            tool_choice = None
-            try:
-                import json_repair
-                tool_context = json_repair.repair_json(company_bot.tool_context, return_objects=True)
-                if tool_context:
-                    # Handle both formats: flat array or dict with "tool" key
-                    if isinstance(tool_context, list):
-                        tools = tool_context
-                        tool_choice = "auto"
-                    elif isinstance(tool_context, dict):
-                        tools = tool_context.get("tool")
-                        tool_choice = tool_context.get("tool_choice", "auto")
+            choice = data.get('choices', [{}])[0]
+            message = choice.get('message', {})
+            finish_reason = choice.get('finish_reason')
+            tool_calls = message.get('tool_calls') or []
 
-                logger.info("Using state machine tool_context")
-            except Exception as e:
-                logger.error(f"Failed to parse state machine tool_context: {e}", exc_info=True)
-                print(f"❌ Error parsing tool_context: {e}")
+            if tool_calls:
+                tc = tool_calls[0]
+                raw_args = tc.get('function', {}).get('arguments', '{}')
+                arguments = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                return {'function_call': {'name': tc['function']['name'], 'arguments': arguments}}, None, 'function_call'
 
-            accumulated_response = ""
-            finish_reason = None
-
-            for chunk_data in handle_openai_response_api(
-                    messages=messages,
-                    system_prompt=system_prompt,
-                    max_token=company_bot.max_token if company_bot.max_token else 2048,
-                    temperature=company_bot.bot_temperature if company_bot.bot_temperature is not None else 0.0,
-                    company_bot=company_bot,
-                    top_p=company_bot.filter_score if company_bot.filter_score else None,
-                    tool_choice=tool_choice,
-                    tools=tools,
-                    stream=stream
-            ):
-                content = chunk_data.get('content', '')
-                finish_reason = chunk_data.get('finish_reason')
-                error = chunk_data.get('error')
-                extra_content = chunk_data.get('extra_content')
-                function_call = chunk_data.get('function_call')
-
-                if error:
-                    logger.error(f'OpenAI error: {error}')
-                    if stream:
-                        self._send_error_chunk(channel_name, "Error processing your request")
-                    return None
-
-                # Handle function call response
-                if function_call:
-                    function_call_result = function_call
-                    logger.info(f"Function call received: {function_call['name']}")
-                    logger.info(f"Function arguments: {function_call.get('arguments', {})}")
-                    # Don't send function_call via WebSocket here - it will be handled by common_handler
-                    # This prevents duplicate WebSocket messages
-
-                if content:
-                    accumulated_response += content
-
-                if extra_content:
-                    print("got extra_content: ", extra_content)
-                    final_extra_content = extra_content
-
-                print(f"Finish reason: {finish_reason}")
-
-                if stream:
-                    if content:
-                        self._send_chunk(channel_name, content, None, None)
-
-                    if finish_reason == "stop":
-                        self._send_chunk(
-                            channel_name,
-                            "",
-                            "stop",
-                            final_extra_content
-                        )
-            # If function call was made, return it for processing
-            if function_call_result:
-                logger.info(f"Returning function call result: {function_call_result}")
-                # Return function call as response dict with finish_reason
-                response_dict = {
-                    'function_call': function_call_result,
-                    'finish_reason': 'function_call',
-                    'extra_content': final_extra_content  # Include sources if available
-                }
-                return response_dict, final_extra_content, 'function_call'
-            
-            if accumulated_response:
+            content = message.get('content', '')
+            print(f'[non_stream_response] finish_reason={finish_reason} content={repr(content[:200])}')
+            if content:
                 save_in_company_db(
-                    session_id=session_id,
-                    profile_id=profile_id,
-                    initiated_by='AI',
-                    message=accumulated_response,
-                    chunks=None,
-                    status=ChatStatus.IN_PROGRESS,
-                    stage=None
+                    session_id=session_id, profile_id=profile_id, initiated_by='AI',
+                    message=content, chunks=retrieved_chunks, status=ChatStatus.IN_PROGRESS, stage=None,
                 )
-
-                logger.info(f'Completed OpenAI response, length: {len(accumulated_response)} chars')
-
-            return accumulated_response, final_extra_content, finish_reason
+            return content, None, finish_reason
 
         except Exception as e:
-            logger.error(f'Error in OpenAI response handling: {e}', exc_info=True)
-            if stream:
-                self._send_error_chunk(channel_name, "An error occurred processing your message")
+            logger.error(f'Error in non-stream gateway call: {e}', exc_info=True)
+            return None, None, None
+
+    def _handle_vector_search(
+        self, query, system_prompt, messages, company_bot, tools,
+        session_id, profile_id, channel_name, cache_policy, metadata, use_stream,
+    ):
+        """Fetch vector context, then make the final LLM call (stream or non-stream)."""
+        from chatbot.services.vector.vector_service import fetch_context_for_query
+
+        context, retrieved_chunks = fetch_context_for_query(query=query, company_bot=company_bot)
+        enriched_prompt = system_prompt + context if context else system_prompt
+        print(f'[vector_search] enriched system prompt:\n{enriched_prompt}...')
+
+        enriched_messages = []
+        if enriched_prompt:
+            enriched_messages.append({'role': 'system', 'content': enriched_prompt})
+        enriched_messages += messages
+
+        remaining_tools = [
+            t for t in (tools or [])
+            if t.get('function', {}).get('name') != 'search_knowledge_base'
+        ] or None
+        remaining_tool_choice = 'auto' if remaining_tools else None
+
+        if use_stream and channel_name:
+            return self._handle_gateway_stream(
+                gateway_messages=enriched_messages, company_bot=company_bot,
+                session_id=session_id, profile_id=profile_id, tools=remaining_tools,
+                tool_choice=remaining_tool_choice, channel_name=channel_name,
+                cache_policy=cache_policy, metadata=metadata, retrieved_chunks=retrieved_chunks,
+            )
+
+        return self._call_gateway_non_stream(
+            gateway_messages=enriched_messages, company_bot=company_bot,
+            session_id=session_id, profile_id=profile_id,
+            tools=remaining_tools, tool_choice=remaining_tool_choice,
+            retrieved_chunks=retrieved_chunks,
+        )
+
+    def _handle_gateway_stream(
+        self, gateway_messages, company_bot, session_id, profile_id, tools, tool_choice,
+        channel_name, cache_policy=None, metadata=None, retrieved_chunks=None,
+    ):
+        import json
+        accumulated_content = []
+        tool_calls_buffer = {}  # index -> {id, name, arguments}
+        finish_reason = None
+        try:
+            for delta_content, tool_use_delta, chunk_finish_reason in call_llm_gateway_stream(
+                messages=gateway_messages, provider=company_bot.provider, model=company_bot.llm_model,
+                params=build_gateway_params(company_bot), tools=tools, tool_choice=tool_choice,
+                cache_policy=cache_policy, metadata=metadata,
+            ):
+                if delta_content:
+                    accumulated_content.append(delta_content)
+                    self._send_chunk(channel_name, delta_content, finish_reason=None)
+                if tool_use_delta:
+                    idx = tool_use_delta.get('index', 0)
+                    if idx not in tool_calls_buffer:
+                        tool_calls_buffer[idx] = {'id': '', 'name': '', 'arguments': ''}
+                    if tool_use_delta.get('id'):
+                        tool_calls_buffer[idx]['id'] = tool_use_delta['id']
+                    if tool_use_delta.get('name'):
+                        tool_calls_buffer[idx]['name'] = tool_use_delta['name']
+                    tool_calls_buffer[idx]['arguments'] += tool_use_delta.get('arguments_delta') or ''
+                if chunk_finish_reason:
+                    finish_reason = chunk_finish_reason
+
+            if tool_calls_buffer:
+                tc = tool_calls_buffer[0]
+                raw_args = tc['arguments']
+                try:
+                    arguments = json.loads(raw_args)
+                except json.JSONDecodeError:
+                    import json_repair
+                    arguments = json_repair.repair_json(raw_args, return_objects=True)
+                return {'function_call': {'name': tc['name'], 'arguments': arguments}}, None, 'function_call'
+
+            content = ''.join(accumulated_content)
+            print(f'[stream_response] finish_reason={finish_reason} content={repr(content[:200])}')
+            if content:
+                save_in_company_db(
+                    session_id=session_id, profile_id=profile_id, initiated_by='AI',
+                    message=content, chunks=retrieved_chunks, status=ChatStatus.IN_PROGRESS, stage=None,
+                )
+            self._send_chunk(channel_name, '', finish_reason=finish_reason or 'stop')
+            return content, None, finish_reason or 'stop'
+
+        except Exception as e:
+            logger.error(f'Error in gateway stream handling: {e}', exc_info=True)
             return None, None, None
 
     def _send_chunk(self, channel_name, content, finish_reason, extra_content=None):

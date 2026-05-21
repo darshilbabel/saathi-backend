@@ -85,8 +85,8 @@ class CompanyBot(models.Model):
                   "for each response."
     )
     provider = models.CharField(
-        max_length=100, choices=LLMProvider.choices, default=LLMProvider.BEDROCK_CONVERSE,
-        help_text="Select the LLM provider (BEDROCK, BEDROCK_CONVERSE, or OPENAI)"
+        max_length=100, choices=LLMProvider.choices, default=LLMProvider.BEDROCK,
+        help_text="Select the LLM provider (BEDROCK, ANTHROPIC, or OPENAI)"
     )
     provider_keys = models.TextField(
         default="", max_length=1000, null=False, blank=True,
@@ -153,8 +153,13 @@ class CompanyBot(models.Model):
     )
     stream = models.BooleanField(
         default=False,
+        help_text="Enable streaming mode for LLM responses."
+    )
+    use_vector_service = models.BooleanField(
+        default=False,
         help_text=(
-            "Enable streaming mode for LLM responses."
+            "Enable vector knowledge base search. Uses a two-step LLM call: "
+            "first to extract the search query, then to answer with retrieved context."
         )
     )
 
