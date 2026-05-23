@@ -153,6 +153,7 @@ class MediaTypeChoices(models.TextChoices):
     HEIF = 'image/heif', _('HEIF')
     HEIC = 'image/heic', _('HEIC')
     XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', _('XLSX')
+    DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', _('DOCX')
 
 
 class FileTypeChoices(models.TextChoices):

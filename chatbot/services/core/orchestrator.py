@@ -68,6 +68,16 @@ class ChatOrchestrator:
                 company_bot=session_data['company_bot'], state_machine=state_machine
             )
 
+            # Append running finalized sources so the LLM knows what to update on each turn
+            chat_session = session_data['chat_session']
+            finalized_sources = (chat_session.other_params or {}).get('finalized_sources')
+            if finalized_sources:
+                import json as _json
+                sources_block = '\n'.join(
+                    f'- {s.get("title", "")} — {s.get("url", "")}' for s in finalized_sources
+                )
+                prompt_to_use += f'\n\nCurrently finalized sources (update via respond_to_user.finalized_sources when user accepts or rejects content):\n{sources_block}'
+
             # Get response using strategy
             response_params = {
                 'system_prompt': prompt_to_use,

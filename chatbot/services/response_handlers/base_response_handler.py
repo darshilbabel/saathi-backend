@@ -152,7 +152,11 @@ class BaseResponseHandler(ABC):
 
             if isinstance(result, tuple):
                 response, extra_content, finish_reason = result
-                
+
+                # Pull out chunks accumulated during tool loop (KB search before pass-through tool)
+                if isinstance(extra_content, dict) and '_retrieved_chunks' in extra_content:
+                    chunks = extra_content.pop('_retrieved_chunks') or []
+
                 # Store extra_content if present for later use
                 if extra_content:
                     kwargs['llm_extra_content'] = extra_content
@@ -346,7 +350,7 @@ class BaseResponseHandler(ABC):
         current_messages = gateway_messages
         current_tools = tools
         current_tool_choice = tool_choice
-        retrieved_chunks = None
+        retrieved_chunks = []
         append_to_last = False
         max_iterations = 5
 
@@ -402,17 +406,23 @@ class BaseResponseHandler(ABC):
 
             if tool_name not in self._executable_tools:
                 logger.info(f'[tool_loop] passing through tool={tool_name} to process_response')
+                if retrieved_chunks:
+                    response_data, extra, finish = result
+                    extra = extra or {}
+                    extra['_retrieved_chunks'] = retrieved_chunks
+                    return response_data, extra, finish
                 return result
 
             logger.info(f'[tool_loop] iteration={iteration} executing tool={tool_name}')
 
-            tool_result_text, retrieved_chunks = self._execute_tool(
+            tool_result_text, new_chunks = self._execute_tool(
                 tool_name=tool_name, arguments=arguments, company_bot=company_bot,
             )
+            retrieved_chunks.extend(new_chunks or [])
 
             # If KB search found nothing and web search is configured, activate it for the next call
             if tool_name == 'search_knowledge_base':
-                if not retrieved_chunks:
+                if not new_chunks:
                     use_web_search = getattr(company_bot, 'enable_web_search', False)
                     logger.info('[tool_loop] KB search empty — enabling web search for next iteration')
                 else:
@@ -455,10 +465,17 @@ class BaseResponseHandler(ABC):
             from chatbot.services.vector.vector_service import fetch_context_for_query
             query = arguments.get('query', '') if isinstance(arguments, dict) else ''
             _, retrieved_chunks = fetch_context_for_query(query=query, company_bot=company_bot)
-            chunks_text = (
-                '\n\n'.join(c['text'] for c in retrieved_chunks)
-                if retrieved_chunks else 'No relevant results found in the knowledge base.'
-            )
+            if retrieved_chunks:
+                parts = []
+                for c in retrieved_chunks:
+                    title = c.get('title', '')
+                    url = c.get('url', '')
+                    text = c.get('text', '')
+                    header = f'[{title}]({url})' if url else title
+                    parts.append(f'Source: {header}\n{text}')
+                chunks_text = '\n\n---\n\n'.join(parts)
+            else:
+                chunks_text = 'No relevant results found in the knowledge base.'
             logger.info(f'[tool_loop] search_knowledge_base: {len(retrieved_chunks)} chunks for query: {query}')
             return chunks_text, retrieved_chunks
 
@@ -546,7 +563,8 @@ class BaseResponseHandler(ABC):
             if not use_web_search:
                 stream_params.pop('web_search_options', None)
             print(f'[stream] use_web_search={use_web_search} bot.enable_web_search={getattr(company_bot, "enable_web_search", "N/A")} web_search_in_params={"web_search_options" in stream_params}')
-            for delta_content, tool_use_delta, chunk_finish_reason in call_llm_gateway_stream(
+            citation_chunks = []
+            for delta_content, tool_use_delta, chunk_finish_reason, chunk_citations in call_llm_gateway_stream(
                 messages=gateway_messages, provider=company_bot.provider, model=company_bot.llm_model,
                 params=stream_params, tools=tools, tool_choice=tool_choice,
                 cache_policy=cache_policy, metadata=metadata,
@@ -563,6 +581,8 @@ class BaseResponseHandler(ABC):
                     if tool_use_delta.get('name'):
                         tool_calls_buffer[idx]['name'] = tool_use_delta['name']
                     tool_calls_buffer[idx]['arguments'] += tool_use_delta.get('arguments_delta') or ''
+                if chunk_citations:
+                    citation_chunks.extend(self._extract_citation_chunks_from_stream(chunk_citations))
                 if chunk_finish_reason:
                     finish_reason = chunk_finish_reason
 
@@ -584,20 +604,22 @@ class BaseResponseHandler(ABC):
                 except json.JSONDecodeError:
                     import json_repair
                     arguments = json_repair.repair_json(raw_args, return_objects=True)
-                return {'function_call': {'name': tc['name'], 'arguments': arguments}}, None, 'function_call'
+                all_chunks_for_tool = list(retrieved_chunks or []) + citation_chunks
+                extra_for_tool = {'_retrieved_chunks': all_chunks_for_tool} if all_chunks_for_tool else None
+                return {'function_call': {'name': tc['name'], 'arguments': arguments}}, extra_for_tool, 'function_call'
 
             # No tool call — flush buffered content to FE now
             content = ''.join(accumulated_content)
-            print(f'[stream_response] finish_reason={finish_reason} content={repr(content[:200])}')
+            all_chunks = list(retrieved_chunks or []) + citation_chunks
             if content:
                 for chunk in accumulated_content:
                     self._send_chunk(channel_name, chunk, finish_reason=None)
                 save_in_company_db(
                     session_id=session_id, profile_id=profile_id, initiated_by='AI',
-                    message=content, chunks=retrieved_chunks, status=ChatStatus.IN_PROGRESS, stage=None,
+                    message=content, chunks=all_chunks, status=ChatStatus.IN_PROGRESS, stage=None,
                     append_to_last=append_to_last,
                 )
-            sources = self._prepare_sources(retrieved_chunks)
+            sources = self._prepare_sources(all_chunks)
             extra_content = {'sources': sources} if sources else None
             self._send_chunk(channel_name, '', finish_reason=finish_reason or 'stop', extra_content=extra_content)
             return content, extra_content, finish_reason or 'stop'
@@ -631,7 +653,7 @@ class BaseResponseHandler(ABC):
         return sources
 
     def _extract_citation_chunks(self, message):
-        """Extract web search citations from the gateway message and return as chunk dicts."""
+        """Extract web search citations from a non-stream gateway message and return as chunk dicts."""
         citations_raw = message.get('citations') or []
         chunks = []
         for group in citations_raw:
@@ -643,6 +665,25 @@ class BaseResponseHandler(ABC):
                 url = citation.get('url', '')
                 title = citation.get('title', '')
                 text = citation.get('cited_text', '')
+                if url or title:
+                    chunks.append({'text': text, 'title': title, 'url': url})
+        return chunks
+
+    def _extract_citation_chunks_from_stream(self, citation_events):
+        """Extract web search citations from stream citation events and return as chunk dicts."""
+        chunks = []
+        for event in (citation_events or []):
+            if not isinstance(event, dict):
+                continue
+            # Gateway may send each citation event directly as a citation dict,
+            # or as a list of citation dicts under a key
+            candidates = event.get('citations') or event.get('results') or [event]
+            for item in candidates:
+                if not isinstance(item, dict):
+                    continue
+                url = item.get('url', '')
+                title = item.get('title', '')
+                text = item.get('cited_text', '') or item.get('text', '')
                 if url or title:
                     chunks.append({'text': text, 'title': title, 'url': url})
         return chunks

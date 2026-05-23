@@ -657,4 +657,3 @@ class PDFTemplates(models.Model):
             models.Index(fields=['template_name']),
             models.Index(fields=['user_type']),
         ]
-
