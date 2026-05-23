@@ -541,3 +541,9 @@ class OperationTypeChoices(models.TextChoices):
     LLM = 'llm', _('LLM')
     NON_LLM = 'non_llm', _('Non-LLM')
 
+
+class WebSearchContextSize(models.TextChoices):
+    LOW = 'low', _('Low')
+    MEDIUM = 'medium', _('Medium')
+    HIGH = 'high', _('High')
+

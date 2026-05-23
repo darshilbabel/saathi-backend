@@ -689,6 +689,13 @@ class CommonResponseHandler(BaseResponseHandler):
             response=response, company_bot=company_bot
         )
 
+        llm_extra_content = kwargs.get('llm_extra_content')
+        if llm_extra_content:
+            if extra_content:
+                extra_content.update(llm_extra_content)
+            else:
+                extra_content = llm_extra_content
+
         if streaming_completed:
             print("Streaming already completed - skipping duplicate processing")
             logger.info("Streaming already completed - skipping duplicate processing")

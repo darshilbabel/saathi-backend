@@ -13,7 +13,7 @@ from chatbot.models.enums import (
     FeedbackChoices, CompanyBotTypeChoices, CompanyBotDynamicContextType, CompanyChatSourceChoices,
     VoiceProvider, VoiceType, LLMProvider, EntityTypeChoices, TextConversionType,
     PreProcessType, PreProcessOutputMode, PostProcessType, PostProcessOutputMode,
-    UserTypeChoices, OperationTypeChoices, BotStrategyChoices
+    UserTypeChoices, OperationTypeChoices, BotStrategyChoices, WebSearchContextSize
 )
 
 S3_BASE_URL = os.getenv('S3_BASE_URL')
@@ -161,6 +161,16 @@ class CompanyBot(models.Model):
             "Enable vector knowledge base search. Uses a two-step LLM call: "
             "first to extract the search query, then to answer with retrieved context."
         )
+    )
+    enable_web_search = models.BooleanField(
+        default=False,
+        help_text="Enable web search via the LLM gateway."
+    )
+    web_search_context_size = models.CharField(
+        max_length=10,
+        choices=WebSearchContextSize.choices,
+        default=WebSearchContextSize.MEDIUM,
+        help_text="Amount of context the web search retrieves. Only used when enable_web_search is True."
     )
 
     history = HistoricalRecords()

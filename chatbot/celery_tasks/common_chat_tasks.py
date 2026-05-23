@@ -13,7 +13,7 @@ channel_layer = get_channel_layer()
 @shared_task
 def save_in_company_db(
         session_id, profile_id, initiated_by, message, chunks, status, translated_message=None, audio_base64=None,
-        stage=None, other_params=None
+        stage=None, other_params=None, append_to_last=False
 ):
     if initiated_by == 'AI':
         receiver = Profile.objects.filter(id=profile_id).first()
@@ -31,7 +31,10 @@ def save_in_company_db(
     #     audio_file=None
 
     if last_chat and last_chat.sender == sender:
-        last_chat.message = message
+        if append_to_last:
+            last_chat.message = (last_chat.message or '') + '\n\n' + message
+        else:
+            last_chat.message = message
         last_chat.translated_message = translated_message
         last_chat.chunks = chunks
         last_chat.status = status

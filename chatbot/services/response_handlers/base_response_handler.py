@@ -24,6 +24,8 @@ class BaseResponseHandler(ABC):
         self.postprocessing_service = PostprocessingService()
         self.min_word_count = 3
         self.max_retry_attempts = 2
+        self._executable_tools = {'search_knowledge_base'}
+        self._gateway_handled_tools = {'web_search'}
 
     def _is_response_too_short(self, response):
         """
@@ -322,6 +324,8 @@ class BaseResponseHandler(ABC):
     def _handle_gateway_response(
         self, system_prompt, messages, company_bot, session_id, profile_id, tools=None, channel_name=None,
     ):
+        import json as _json
+
         tool_choice = None
         if isinstance(tools, dict):
             tool_choice = tools.get('tool_choice', 'auto')
@@ -336,53 +340,147 @@ class BaseResponseHandler(ABC):
 
         other = company_bot.other_params or {}
         cache_policy = other.get('cache_policy')
-        metadata = other.get('metadata')
+        metadata_param = other.get('metadata')
         use_stream = self.should_use_streaming(company_bot) and channel_name
 
-        if use_stream:
-            result = self._handle_gateway_stream(
-                gateway_messages=gateway_messages, company_bot=company_bot,
-                session_id=session_id, profile_id=profile_id, tools=tools,
-                tool_choice=tool_choice, channel_name=channel_name,
-                cache_policy=cache_policy, metadata=metadata,
+        current_messages = gateway_messages
+        current_tools = tools
+        current_tool_choice = tool_choice
+        retrieved_chunks = None
+        append_to_last = False
+        max_iterations = 5
+
+        # If the KB tool is present, web search is held back until KB returns nothing (fallback).
+        # If there is no KB tool, respect enable_web_search from the bot config immediately.
+        has_kb_tool = any(
+            (t.get('function', {}).get('name') or t.get('name', '')) == 'search_knowledge_base'
+            for t in (tools or [])
+        )
+        use_web_search = False if has_kb_tool else getattr(company_bot, 'enable_web_search', False)
+
+        for iteration in range(max_iterations):
+            if use_stream:
+                result = self._handle_gateway_stream(
+                    gateway_messages=current_messages, company_bot=company_bot,
+                    session_id=session_id, profile_id=profile_id, tools=current_tools,
+                    tool_choice=current_tool_choice, channel_name=channel_name,
+                    cache_policy=cache_policy, metadata=metadata_param,
+                    retrieved_chunks=retrieved_chunks, append_to_last=append_to_last,
+                    use_web_search=use_web_search,
+                )
+            else:
+                result = self._call_gateway_non_stream(
+                    gateway_messages=current_messages, company_bot=company_bot,
+                    session_id=session_id, profile_id=profile_id,
+                    tools=current_tools, tool_choice=current_tool_choice,
+                    retrieved_chunks=retrieved_chunks, append_to_last=append_to_last,
+                    use_web_search=use_web_search,
+                )
+
+            print(f'[tool_loop] iteration={iteration} result={str(result)[:200]}')
+
+            print("="*50)
+            print("Result: ", result)
+            print("="*50)
+
+            if not result or (isinstance(result, tuple) and result[0] is None):
+                return None, None, None
+
+            response_data, extra, finish = result
+
+            if not (isinstance(response_data, dict) and 'function_call' in response_data):
+                # Web search held back for KB fallback, but LLM returned plain text without calling KB.
+                # Retry once with web search so the LLM can pull live results.
+                if not use_web_search and getattr(company_bot, 'enable_web_search', False) and iteration == 0:
+                    use_web_search = True
+                    logger.info('[tool_loop] LLM did not call KB — retrying with web search enabled')
+                    continue
+                return result
+
+            tool_name = response_data['function_call'].get('name', '')
+            arguments = response_data['function_call'].get('arguments', {})
+
+            if tool_name not in self._executable_tools:
+                logger.info(f'[tool_loop] passing through tool={tool_name} to process_response')
+                return result
+
+            logger.info(f'[tool_loop] iteration={iteration} executing tool={tool_name}')
+
+            tool_result_text, retrieved_chunks = self._execute_tool(
+                tool_name=tool_name, arguments=arguments, company_bot=company_bot,
             )
-        else:
-            result = self._call_gateway_non_stream(
-                gateway_messages=gateway_messages, company_bot=company_bot,
-                session_id=session_id, profile_id=profile_id,
-                tools=tools, tool_choice=tool_choice,
+
+            # If KB search found nothing and web search is configured, activate it for the next call
+            if tool_name == 'search_knowledge_base':
+                if not retrieved_chunks:
+                    use_web_search = getattr(company_bot, 'enable_web_search', False)
+                    logger.info('[tool_loop] KB search empty — enabling web search for next iteration')
+                else:
+                    use_web_search = False
+
+            tool_call_id = f'tool_{iteration}'
+            args_str = _json.dumps(arguments) if isinstance(arguments, dict) else (arguments or '{}')
+            current_messages = list(current_messages) + [
+                {
+                    'role': 'assistant',
+                    'content': None,
+                    'tool_calls': [{
+                        'id': tool_call_id,
+                        'type': 'function',
+                        'function': {'name': tool_name, 'arguments': args_str},
+                    }],
+                },
+                {
+                    'role': 'tool',
+                    'tool_call_id': tool_call_id,
+                    'name': tool_name,
+                    'content': tool_result_text,
+                },
+            ]
+
+            # Remove executed tool so the LLM cannot call it again
+            current_tools = [
+                t for t in (current_tools or [])
+                if (t.get('function', {}).get('name') or t.get('name', '')) != tool_name
+            ] or None
+            current_tool_choice = 'auto' if current_tools else None
+            append_to_last = True
+
+        logger.error('[tool_loop] max tool iterations reached')
+        return self.default_error_message, None, 'stop'
+
+    def _execute_tool(self, tool_name, arguments, company_bot):
+        """Execute a tool call and return (result_text_for_llm, retrieved_chunks)."""
+        if tool_name == 'search_knowledge_base':
+            from chatbot.services.vector.vector_service import fetch_context_for_query
+            query = arguments.get('query', '') if isinstance(arguments, dict) else ''
+            _, retrieved_chunks = fetch_context_for_query(query=query, company_bot=company_bot)
+            chunks_text = (
+                '\n\n'.join(c['text'] for c in retrieved_chunks)
+                if retrieved_chunks else 'No relevant results found in the knowledge base.'
             )
+            logger.info(f'[tool_loop] search_knowledge_base: {len(retrieved_chunks)} chunks for query: {query}')
+            return chunks_text, retrieved_chunks
 
-        print("Result found: ", result)
-
-        if not result or (isinstance(result, tuple) and result[0] is None):
-            return None, None, None
-
-        response_data, extra, finish = result
-
-        if (getattr(company_bot, 'use_vector_service', False) and isinstance(response_data, dict) and
-                response_data.get('function_call', {}).get('name') == 'search_knowledge_base'):
-            query = response_data['function_call'].get('arguments', {}).get('query', '')
-            return self._handle_vector_search(
-                query=query, system_prompt=system_prompt, messages=messages,
-                company_bot=company_bot, tools=tools, session_id=session_id,
-                profile_id=profile_id, channel_name=channel_name,
-                cache_policy=cache_policy, metadata=metadata, use_stream=use_stream,
-            )
-
-        return response_data, extra, finish
+        logger.error(f'[tool_loop] unknown tool: {tool_name}')
+        return f'Tool "{tool_name}" is not available.', []
 
     def _call_gateway_non_stream(
         self, gateway_messages, company_bot, session_id, profile_id, tools, tool_choice,
-        retrieved_chunks=None,
+        retrieved_chunks=None, append_to_last=False, use_web_search=False,
     ):
         """Single non-streaming LLM call, returns (response, extra, finish_reason)."""
         import json
         try:
+            params = build_gateway_params(company_bot)
+            if not use_web_search:
+                params.pop('web_search_options', None)
+            print(f'[non_stream] use_web_search={use_web_search} bot.enable_web_search={getattr(company_bot, "enable_web_search", "N/A")} web_search_in_params={"web_search_options" in params}')
             data = call_llm_gateway(
                 messages=gateway_messages, provider=company_bot.provider, model=company_bot.llm_model,
-                params=build_gateway_params(company_bot), tools=tools, tool_choice=tool_choice,
+                params=params, tools=tools, tool_choice=tool_choice,
             )
+            print("Data from llm gateway: ", data)
             if not data:
                 return None, None, None
 
@@ -391,79 +489,71 @@ class BaseResponseHandler(ABC):
             finish_reason = choice.get('finish_reason')
             tool_calls = message.get('tool_calls') or []
 
-            if tool_calls:
-                tc = tool_calls[0]
-                raw_args = tc.get('function', {}).get('arguments', '{}')
+            executable_tc = next(
+                (tc for tc in tool_calls
+                 if (tc.get('function', {}).get('name') or tc.get('name', '')) in self._executable_tools),
+                None,
+            )
+            if executable_tc:
+                raw_args = executable_tc.get('function', {}).get('arguments', '{}')
                 arguments = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-                return {'function_call': {'name': tc['function']['name'], 'arguments': arguments}}, None, 'function_call'
+                return {'function_call': {'name': executable_tc['function']['name'], 'arguments': arguments}}, None, 'function_call'
+
+            # Pass-through tools: not executable by us and not handled by the gateway → return to process_response
+            passthrough_tc = next(
+                (tc for tc in tool_calls
+                 if (tc.get('function', {}).get('name') or tc.get('name', '')) not in self._gateway_handled_tools),
+                None,
+            )
+            if passthrough_tc:
+                tc_name = passthrough_tc.get('function', {}).get('name') or passthrough_tc.get('name', '')
+                raw_args = passthrough_tc.get('function', {}).get('arguments', '{}')
+                arguments = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                return {'function_call': {'name': tc_name, 'arguments': arguments}}, None, 'function_call'
 
             content = message.get('content', '')
             print(f'[non_stream_response] finish_reason={finish_reason} content={repr(content[:200])}')
+
+            citation_chunks = self._extract_citation_chunks(message)
+            all_chunks = list(retrieved_chunks or []) + citation_chunks
+
             if content:
                 save_in_company_db(
                     session_id=session_id, profile_id=profile_id, initiated_by='AI',
-                    message=content, chunks=retrieved_chunks, status=ChatStatus.IN_PROGRESS, stage=None,
+                    message=content, chunks=all_chunks, status=ChatStatus.IN_PROGRESS, stage=None,
+                    append_to_last=append_to_last,
                 )
-            return content, None, finish_reason
+            sources = self._prepare_sources(all_chunks)
+            extra = {'sources': sources} if sources else None
+            return content, extra, finish_reason
 
         except Exception as e:
             logger.error(f'Error in non-stream gateway call: {e}', exc_info=True)
             return None, None, None
 
-    def _handle_vector_search(
-        self, query, system_prompt, messages, company_bot, tools,
-        session_id, profile_id, channel_name, cache_policy, metadata, use_stream,
-    ):
-        """Fetch vector context, then make the final LLM call (stream or non-stream)."""
-        from chatbot.services.vector.vector_service import fetch_context_for_query
-
-        context, retrieved_chunks = fetch_context_for_query(query=query, company_bot=company_bot)
-        enriched_prompt = system_prompt + context if context else system_prompt
-        print(f'[vector_search] enriched system prompt:\n{enriched_prompt}...')
-
-        enriched_messages = []
-        if enriched_prompt:
-            enriched_messages.append({'role': 'system', 'content': enriched_prompt})
-        enriched_messages += messages
-
-        remaining_tools = [
-            t for t in (tools or [])
-            if t.get('function', {}).get('name') != 'search_knowledge_base'
-        ] or None
-        remaining_tool_choice = 'auto' if remaining_tools else None
-
-        if use_stream and channel_name:
-            return self._handle_gateway_stream(
-                gateway_messages=enriched_messages, company_bot=company_bot,
-                session_id=session_id, profile_id=profile_id, tools=remaining_tools,
-                tool_choice=remaining_tool_choice, channel_name=channel_name,
-                cache_policy=cache_policy, metadata=metadata, retrieved_chunks=retrieved_chunks,
-            )
-
-        return self._call_gateway_non_stream(
-            gateway_messages=enriched_messages, company_bot=company_bot,
-            session_id=session_id, profile_id=profile_id,
-            tools=remaining_tools, tool_choice=remaining_tool_choice,
-            retrieved_chunks=retrieved_chunks,
-        )
 
     def _handle_gateway_stream(
         self, gateway_messages, company_bot, session_id, profile_id, tools, tool_choice,
-        channel_name, cache_policy=None, metadata=None, retrieved_chunks=None,
+        channel_name, cache_policy=None, metadata=None, retrieved_chunks=None, append_to_last=False,
+        use_web_search=False,
     ):
         import json
         accumulated_content = []
         tool_calls_buffer = {}  # index -> {id, name, arguments}
         finish_reason = None
         try:
+            stream_params = build_gateway_params(company_bot)
+            if not use_web_search:
+                stream_params.pop('web_search_options', None)
+            print(f'[stream] use_web_search={use_web_search} bot.enable_web_search={getattr(company_bot, "enable_web_search", "N/A")} web_search_in_params={"web_search_options" in stream_params}')
             for delta_content, tool_use_delta, chunk_finish_reason in call_llm_gateway_stream(
                 messages=gateway_messages, provider=company_bot.provider, model=company_bot.llm_model,
-                params=build_gateway_params(company_bot), tools=tools, tool_choice=tool_choice,
+                params=stream_params, tools=tools, tool_choice=tool_choice,
                 cache_policy=cache_policy, metadata=metadata,
             ):
                 if delta_content:
+                    # Buffer content — do not stream to FE yet; we only flush if there is no tool call
                     accumulated_content.append(delta_content)
-                    self._send_chunk(channel_name, delta_content, finish_reason=None)
                 if tool_use_delta:
                     idx = tool_use_delta.get('index', 0)
                     if idx not in tool_calls_buffer:
@@ -477,8 +567,18 @@ class BaseResponseHandler(ABC):
                     finish_reason = chunk_finish_reason
 
             if tool_calls_buffer:
+                # Tool call detected — if LLM generated preamble text before the tool call, send it to FE and save
+                if accumulated_content:
+                    preamble = ''.join(accumulated_content)
+                    for chunk in accumulated_content:
+                        self._send_chunk(channel_name, chunk, finish_reason=None)
+                    save_in_company_db(
+                        session_id=session_id, profile_id=profile_id, initiated_by='AI',
+                        message=preamble, chunks=None, status=ChatStatus.IN_PROGRESS, stage=None,
+                    )
                 tc = tool_calls_buffer[0]
                 raw_args = tc['arguments']
+                print(f'[stream_tool_call] name={tc["name"]} args={raw_args[:200]}')
                 try:
                     arguments = json.loads(raw_args)
                 except json.JSONDecodeError:
@@ -486,19 +586,66 @@ class BaseResponseHandler(ABC):
                     arguments = json_repair.repair_json(raw_args, return_objects=True)
                 return {'function_call': {'name': tc['name'], 'arguments': arguments}}, None, 'function_call'
 
+            # No tool call — flush buffered content to FE now
             content = ''.join(accumulated_content)
             print(f'[stream_response] finish_reason={finish_reason} content={repr(content[:200])}')
             if content:
+                for chunk in accumulated_content:
+                    self._send_chunk(channel_name, chunk, finish_reason=None)
                 save_in_company_db(
                     session_id=session_id, profile_id=profile_id, initiated_by='AI',
                     message=content, chunks=retrieved_chunks, status=ChatStatus.IN_PROGRESS, stage=None,
+                    append_to_last=append_to_last,
                 )
-            self._send_chunk(channel_name, '', finish_reason=finish_reason or 'stop')
-            return content, None, finish_reason or 'stop'
+            sources = self._prepare_sources(retrieved_chunks)
+            extra_content = {'sources': sources} if sources else None
+            self._send_chunk(channel_name, '', finish_reason=finish_reason or 'stop', extra_content=extra_content)
+            return content, extra_content, finish_reason or 'stop'
 
         except Exception as e:
             logger.error(f'Error in gateway stream handling: {e}', exc_info=True)
             return None, None, None
+
+    def _prepare_sources(self, chunks):
+        """Build deduplicated sources list from retrieved chunks for extra_content."""
+        print("="*100)
+        print("Chunks: ", chunks)
+        print("="*100)
+        if not chunks:
+            return []
+        seen = set()
+        sources = []
+        for chunk in chunks:
+            if not isinstance(chunk, dict):
+                continue
+            title = chunk.get('title', '')
+            url = chunk.get('url', '')
+            key = url or title
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            if url:
+                sources.append({'title': title, 'url': url})
+            else:
+                sources.append({'title': f'Referred: {title}'})
+        return sources
+
+    def _extract_citation_chunks(self, message):
+        """Extract web search citations from the gateway message and return as chunk dicts."""
+        citations_raw = message.get('citations') or []
+        chunks = []
+        for group in citations_raw:
+            if not isinstance(group, list):
+                continue
+            for citation in group:
+                if not isinstance(citation, dict):
+                    continue
+                url = citation.get('url', '')
+                title = citation.get('title', '')
+                text = citation.get('cited_text', '')
+                if url or title:
+                    chunks.append({'text': text, 'title': title, 'url': url})
+        return chunks
 
     def _send_chunk(self, channel_name, content, finish_reason, extra_content=None):
         """Send a chunk via channel layer to the WebSocket."""

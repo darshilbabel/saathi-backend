@@ -16,7 +16,11 @@ def _fetch_chunks(query, top_k, filter_score, priority):
         score = item.get('score', 0)
         text = item.get('text', '')
         if text and len(text) > 20 and score >= filter_score:
-            chunks.append(text)
+            chunks.append({
+                'text': text,
+                'title': item.get('title', ''),
+                'url': item.get('metadata', {}).get('url', ''),
+            })
     return chunks
 
 
@@ -34,8 +38,5 @@ def fetch_context_for_query(query, company_bot):
         no_result_context = ('\n\nNote: The knowledge service does not have relevant information for this query. '
                              'Answer based on your general knowledge or inform the user accordingly.')
         return no_result_context, []
-    print(f'[vector_service] query="{query}" → {len(chunks)} chunks found:')
-    for i, c in enumerate(chunks, 1):
-        print(f'  chunk {i}: {c[:120]}...')
-    context = '\n\nRelevant context from knowledge base:\n' + ''.join(f'\n{c}' for c in chunks)
+    context = '\n\nRelevant context from knowledge base:\n' + ''.join(f'\n{c["text"]}' for c in chunks)
     return context, chunks
