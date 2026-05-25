@@ -255,8 +255,11 @@ def render_template_to_pdf(
     from chatbot.models.chat_models import ChatSession
 
     try:
+        print("flow_route: ", flow_name)
         flow = Flow.objects.filter(flow_route=flow_name).first() if flow_name else None
+        print("Flow found: ", flow)
         pdf_template = PDFTemplates.objects.filter(flow=flow).first() if flow else None
+        print("PDF Template: ", pdf_template)
 
         logger.info(f'[render_template_to_pdf] flow_name={flow_name!r} flow={flow} pdf_template={pdf_template}')
 
