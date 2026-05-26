@@ -396,6 +396,25 @@ class BaseResponseHandler(ABC):
 
             if not (isinstance(response_data, dict) and 'function_call' in response_data):
                 if isinstance(extra, dict) and extra.pop('_respond_to_user_handled', False):
+                    if not response_data and not empty_respond_to_user_retried:
+                        empty_respond_to_user_retried = True
+                        logger.info('[tool_loop] respond_to_user called with no text — retrying with correction')
+                        current_messages = list(current_messages) + [
+                            {
+                                'role': 'assistant', 'content': None,
+                                'tool_calls': [{'id': 'tu_empty_retry', 'type': 'function',
+                                                'function': {'name': 'respond_to_user', 'arguments': '{}'}}],
+                            },
+                            {
+                                'role': 'tool', 'tool_call_id': 'tu_empty_retry',
+                                'name': 'respond_to_user',
+                                'content': 'Error: Response text is required. Write your full reply as plain text first, then call respond_to_user.',
+                            },
+                        ]
+                        continue
+                    if not response_data:
+                        logger.info('[tool_loop] respond_to_user still empty after retry — sending default error')
+                        return self.default_error_message, None, None
                     return response_data, extra or None, finish
                 # Web search held back for KB fallback. Only retry if LLM gave NO response at all —
                 # a non-empty answer is a deliberate choice (and streaming already sent those tokens).
@@ -632,6 +651,8 @@ class BaseResponseHandler(ABC):
                 except json.JSONDecodeError:
                     import json_repair
                     tc_arguments = json_repair.repair_json(raw_args, return_objects=True)
+                if not isinstance(tc_arguments, dict):
+                    tc_arguments = {}
 
                 if tc['name'] == 'respond_to_user' and 'response' not in tc_arguments:
                     # New format: text was already streamed token-by-token; tool call carries metadata only
@@ -664,8 +685,7 @@ class BaseResponseHandler(ABC):
                                                         if k != '_respond_to_user_handled'} or None)
                         return content, extra_content, 'stop'
                     else:
-                        # LLM generated no text — let translate_and_send_message deliver chips via normal path
-                        # finish_reason=None prevents streaming_completed=True so _handle_regular_response runs
+                        # LLM generated no text — signal _handle_gateway_response to retry with correction
                         return content, extra_content, None
 
                 # Any other tool call — preamble was already sent to WS token-by-token; only save to DB
