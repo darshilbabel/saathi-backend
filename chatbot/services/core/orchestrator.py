@@ -65,7 +65,8 @@ class ChatOrchestrator:
 
             # Build prompt
             prompt_to_use = self.prompt_builder.build_system_prompt(
-                company_bot=session_data['company_bot'], state_machine=state_machine
+                company_bot=session_data['company_bot'], state_machine=state_machine,
+                profile=session_data['profile']
             )
 
             # Append running finalized sources so the LLM knows what to update on each turn

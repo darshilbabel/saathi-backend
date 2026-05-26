@@ -20,6 +20,7 @@ def _fetch_chunks(query, top_k, filter_score, priority):
                 'text': text,
                 'title': item.get('title', ''),
                 'url': item.get('metadata', {}).get('url', ''),
+                'score': score,
             })
     return chunks
 

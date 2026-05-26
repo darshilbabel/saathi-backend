@@ -362,6 +362,7 @@ class BaseResponseHandler(ABC):
             for t in (tools or [])
         )
         use_web_search = False if has_kb_tool else getattr(company_bot, 'enable_web_search', False)
+        empty_respond_to_user_retried = False
 
         for iteration in range(max_iterations):
             if use_stream:
@@ -545,12 +546,8 @@ class BaseResponseHandler(ABC):
                     if quick_reply_chips is not None:
                         extra_content['quick_reply_chips'] = quick_reply_chips
 
-                    if content:
-                        save_in_company_db(
-                            session_id=session_id, profile_id=profile_id, initiated_by='AI',
-                            message=content, chunks=all_chunks, status=ChatStatus.IN_PROGRESS,
-                            stage=None, append_to_last=append_to_last,
-                        )
+                    if all_chunks:
+                        extra_content['_retrieved_chunks'] = all_chunks
 
                     extra_content['_respond_to_user_handled'] = True
                     return content, extra_content or None, finish_reason
