@@ -873,15 +873,22 @@ class CommonResponseHandler(BaseResponseHandler):
             if docx_url:
                 extra_content_to_send['docx_url'] = docx_url
 
-            translated_message = translate_and_send_message(
-                accumulated_message=bot_message,
-                current_channel_name=channel_name,
-                current_step_number=chat_session.current_step,
-                finish_reason='stop',
-                route=language,
-                company_bot=company_bot,
-                extra_content=extra_content_to_send if extra_content_to_send else None,
-            )
+            preamble_already_sent = (kwargs.get('llm_extra_content') or {}).get('_text_streamed_to_ws', False)
+            if preamble_already_sent:
+                # Text was already streamed token-by-token; send URLs as stop chunk without repeating text
+                self._send_chunk(channel_name, '', finish_reason='stop',
+                                 extra_content=extra_content_to_send if extra_content_to_send else None)
+                translated_message = bot_message
+            else:
+                translated_message = translate_and_send_message(
+                    accumulated_message=bot_message,
+                    current_channel_name=channel_name,
+                    current_step_number=chat_session.current_step,
+                    finish_reason='stop',
+                    route=language,
+                    company_bot=company_bot,
+                    extra_content=extra_content_to_send if extra_content_to_send else None,
+                )
 
             save_in_company_db(
                 session_id=session_id,

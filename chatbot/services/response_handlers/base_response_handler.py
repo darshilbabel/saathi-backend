@@ -26,6 +26,7 @@ class BaseResponseHandler(ABC):
         self.max_retry_attempts = 2
         self._executable_tools = {'search_knowledge_base'}
         self._gateway_handled_tools = {'web_search'}
+        self._metadata_tools = {'respond_to_user'}
 
     def _is_response_too_short(self, response):
         """
@@ -393,11 +394,13 @@ class BaseResponseHandler(ABC):
             response_data, extra, finish = result
 
             if not (isinstance(response_data, dict) and 'function_call' in response_data):
-                # Web search held back for KB fallback, but LLM returned plain text without calling KB.
-                # Retry once with web search so the LLM can pull live results.
-                if not use_web_search and getattr(company_bot, 'enable_web_search', False) and iteration == 0:
+                if isinstance(extra, dict) and extra.pop('_respond_to_user_handled', False):
+                    return response_data, extra or None, finish
+                # Web search held back for KB fallback. Only retry if LLM gave NO response at all —
+                # a non-empty answer is a deliberate choice (and streaming already sent those tokens).
+                if not use_web_search and getattr(company_bot, 'enable_web_search', False) and iteration == 0 and not response_data:
                     use_web_search = True
-                    logger.info('[tool_loop] LLM did not call KB — retrying with web search enabled')
+                    logger.info('[tool_loop] LLM returned empty response — retrying with web search enabled')
                     continue
                 return result
 
@@ -516,6 +519,43 @@ class BaseResponseHandler(ABC):
                 arguments = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
                 return {'function_call': {'name': executable_tc['function']['name'], 'arguments': arguments}}, None, 'function_call'
 
+            # respond_to_user new format: LLM response text is in message.content; tool args are metadata only
+            respond_to_user_tc = next(
+                (tc for tc in tool_calls
+                 if (tc.get('function', {}).get('name') or tc.get('name', '')) == 'respond_to_user'),
+                None,
+            )
+            if respond_to_user_tc:
+                raw_args = respond_to_user_tc.get('function', {}).get('arguments', '{}')
+                ru_args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                if 'response' not in ru_args:
+                    content = message.get('content', '') or ''
+                    quick_reply_chips = ru_args.get('quick_reply_chips')
+                    finalized_sources = ru_args.get('finalized_sources')
+
+                    if finalized_sources is not None:
+                        self._save_finalized_sources(session_id, finalized_sources)
+
+                    citation_chunks = self._extract_citation_chunks(message)
+                    all_chunks = list(retrieved_chunks or []) + citation_chunks
+                    sources = self._prepare_sources(all_chunks)
+                    extra_content = {}
+                    if sources:
+                        extra_content['sources'] = sources
+                    if quick_reply_chips is not None:
+                        extra_content['quick_reply_chips'] = quick_reply_chips
+
+                    if content:
+                        save_in_company_db(
+                            session_id=session_id, profile_id=profile_id, initiated_by='AI',
+                            message=content, chunks=all_chunks, status=ChatStatus.IN_PROGRESS,
+                            stage=None, append_to_last=append_to_last,
+                        )
+
+                    extra_content['_respond_to_user_handled'] = True
+                    return content, extra_content or None, finish_reason
+                # old format (has 'response' key) — falls through to passthrough_tc below
+
             # Pass-through tools: not executable by us and not handled by the gateway → return to process_response
             passthrough_tc = next(
                 (tc for tc in tool_calls
@@ -570,7 +610,7 @@ class BaseResponseHandler(ABC):
                 cache_policy=cache_policy, metadata=metadata,
             ):
                 if delta_content:
-                    # Buffer content — do not stream to FE yet; we only flush if there is no tool call
+                    self._send_chunk(channel_name, delta_content, finish_reason=None)
                     accumulated_content.append(delta_content)
                 if tool_use_delta:
                     idx = tool_use_delta.get('index', 0)
@@ -587,33 +627,72 @@ class BaseResponseHandler(ABC):
                     finish_reason = chunk_finish_reason
 
             if tool_calls_buffer:
-                # Tool call detected — if LLM generated preamble text before the tool call, send it to FE and save
-                if accumulated_content:
-                    preamble = ''.join(accumulated_content)
-                    for chunk in accumulated_content:
-                        self._send_chunk(channel_name, chunk, finish_reason=None)
-                    save_in_company_db(
-                        session_id=session_id, profile_id=profile_id, initiated_by='AI',
-                        message=preamble, chunks=None, status=ChatStatus.IN_PROGRESS, stage=None,
-                    )
                 tc = tool_calls_buffer[0]
                 raw_args = tc['arguments']
                 print(f'[stream_tool_call] name={tc["name"]} args={raw_args[:200]}')
                 try:
-                    arguments = json.loads(raw_args)
+                    tc_arguments = json.loads(raw_args)
                 except json.JSONDecodeError:
                     import json_repair
-                    arguments = json_repair.repair_json(raw_args, return_objects=True)
-                all_chunks_for_tool = list(retrieved_chunks or []) + citation_chunks
-                extra_for_tool = {'_retrieved_chunks': all_chunks_for_tool} if all_chunks_for_tool else None
-                return {'function_call': {'name': tc['name'], 'arguments': arguments}}, extra_for_tool, 'function_call'
+                    tc_arguments = json_repair.repair_json(raw_args, return_objects=True)
 
-            # No tool call — flush buffered content to FE now
+                if tc['name'] == 'respond_to_user' and 'response' not in tc_arguments:
+                    # New format: text was already streamed token-by-token; tool call carries metadata only
+                    content = ''.join(accumulated_content)
+                    quick_reply_chips = tc_arguments.get('quick_reply_chips')
+                    finalized_sources = tc_arguments.get('finalized_sources')
+
+                    if finalized_sources is not None:
+                        self._save_finalized_sources(session_id, finalized_sources)
+
+                    all_chunks = list(retrieved_chunks or []) + citation_chunks
+                    sources = self._prepare_sources(all_chunks)
+                    extra_content = {}
+                    if sources:
+                        extra_content['sources'] = sources
+                    if quick_reply_chips is not None:
+                        extra_content['quick_reply_chips'] = quick_reply_chips
+                    # Marker consumed by _handle_gateway_response to skip web-search retry
+                    extra_content['_respond_to_user_handled'] = True
+
+                    if content:
+                        # Text was streamed token-by-token; save to DB and send stop chunk with chips
+                        save_in_company_db(
+                            session_id=session_id, profile_id=profile_id, initiated_by='AI',
+                            message=content, chunks=all_chunks, status=ChatStatus.IN_PROGRESS,
+                            stage=None, append_to_last=append_to_last,
+                        )
+                        self._send_chunk(channel_name, '', finish_reason='stop',
+                                         extra_content={k: v for k, v in extra_content.items()
+                                                        if k != '_respond_to_user_handled'} or None)
+                        return content, extra_content, 'stop'
+                    else:
+                        # LLM generated no text — let translate_and_send_message deliver chips via normal path
+                        # finish_reason=None prevents streaming_completed=True so _handle_regular_response runs
+                        return content, extra_content, None
+
+                # Any other tool call — preamble was already sent to WS token-by-token; only save to DB
+                preamble_streamed = bool(accumulated_content)
+                if accumulated_content:
+                    preamble = ''.join(accumulated_content)
+                    save_in_company_db(
+                        session_id=session_id, profile_id=profile_id, initiated_by='AI',
+                        message=preamble, chunks=None, status=ChatStatus.IN_PROGRESS, stage=None,
+                    )
+                all_chunks_for_tool = list(retrieved_chunks or []) + citation_chunks
+                extra_for_tool = {}
+                if all_chunks_for_tool:
+                    extra_for_tool['_retrieved_chunks'] = all_chunks_for_tool
+                if preamble_streamed:
+                    # Signal to process_response handlers that text was already sent to WS
+                    extra_for_tool['_text_streamed_to_ws'] = True
+                extra_for_tool = extra_for_tool or None
+                return {'function_call': {'name': tc['name'], 'arguments': tc_arguments}}, extra_for_tool, 'function_call'
+
+            # No tool call — content was already streamed token-by-token; save to DB
             content = ''.join(accumulated_content)
             all_chunks = list(retrieved_chunks or []) + citation_chunks
             if content:
-                for chunk in accumulated_content:
-                    self._send_chunk(channel_name, chunk, finish_reason=None)
                 save_in_company_db(
                     session_id=session_id, profile_id=profile_id, initiated_by='AI',
                     message=content, chunks=all_chunks, status=ChatStatus.IN_PROGRESS, stage=None,
@@ -687,6 +766,17 @@ class BaseResponseHandler(ABC):
                 if url or title:
                     chunks.append({'text': text, 'title': title, 'url': url})
         return chunks
+
+    def _save_finalized_sources(self, session_id, finalized_sources):
+        """Persist finalized_sources from respond_to_user into ChatSession.other_params."""
+        try:
+            session = ChatSession.objects.get(session=session_id)
+            other_params = session.other_params or {}
+            other_params['finalized_sources'] = finalized_sources
+            session.other_params = other_params
+            session.save(update_fields=['other_params'])
+        except Exception as e:
+            logger.error(f'[_save_finalized_sources] failed: {e}')
 
     def _send_chunk(self, channel_name, content, finish_reason, extra_content=None):
         """Send a chunk via channel layer to the WebSocket."""
