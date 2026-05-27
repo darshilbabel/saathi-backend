@@ -158,6 +158,9 @@ class BaseResponseHandler(ABC):
                 if isinstance(extra_content, dict) and '_retrieved_chunks' in extra_content:
                     chunks = extra_content.pop('_retrieved_chunks') or []
 
+                if isinstance(extra_content, dict) and '_usage_cost' in extra_content:
+                    kwargs['_usage_cost'] = extra_content.pop('_usage_cost')
+
                 # Store extra_content if present for later use
                 if extra_content:
                     kwargs['llm_extra_content'] = extra_content
@@ -240,9 +243,13 @@ class BaseResponseHandler(ABC):
                 except CompanyStateMachine.DoesNotExist:
                     logger.info(f"Next state machine {next_stage_number} not found, likely at end of flow")
 
-        return self.process_response(
+        process_result = self.process_response(
             response, chat_session, chunks, streaming_completed=streaming_completed, **kwargs
         )
+        _usage_cost = kwargs.get('_usage_cost')
+        if _usage_cost:
+            self._update_last_chat_usage(session_id, _usage_cost)
+        return process_result
 
     def analyze_response_for_postprocessing(self, response):
         """Analyze if response needs postprocessing - can be overridden by subclasses"""
@@ -354,6 +361,7 @@ class BaseResponseHandler(ABC):
         retrieved_chunks = []
         append_to_last = False
         max_iterations = 5
+        turn_usage = {'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0, 'cost_usd': 0.0}
 
         # If the KB tool is present, web search is held back until KB returns nothing (fallback).
         # If there is no KB tool, respect enable_web_search from the bot config immediately.
@@ -372,7 +380,7 @@ class BaseResponseHandler(ABC):
                     tool_choice=current_tool_choice, channel_name=channel_name,
                     cache_policy=cache_policy, metadata=metadata_param,
                     retrieved_chunks=retrieved_chunks, append_to_last=append_to_last,
-                    use_web_search=use_web_search,
+                    use_web_search=use_web_search, turn_usage=turn_usage,
                 )
             else:
                 result = self._call_gateway_non_stream(
@@ -380,7 +388,7 @@ class BaseResponseHandler(ABC):
                     session_id=session_id, profile_id=profile_id,
                     tools=current_tools, tool_choice=current_tool_choice,
                     retrieved_chunks=retrieved_chunks, append_to_last=append_to_last,
-                    use_web_search=use_web_search,
+                    use_web_search=use_web_search, turn_usage=turn_usage,
                 )
 
             print(f'[tool_loop] iteration={iteration} result={str(result)[:200]}')
@@ -415,26 +423,26 @@ class BaseResponseHandler(ABC):
                     if not response_data:
                         logger.info('[tool_loop] respond_to_user still empty after retry — sending default error')
                         return self.default_error_message, None, None
-                    return response_data, extra or None, finish
+                    return self._with_turn_usage(response_data, extra, finish, turn_usage)
                 # Web search held back for KB fallback. Only retry if LLM gave NO response at all —
                 # a non-empty answer is a deliberate choice (and streaming already sent those tokens).
                 if not use_web_search and getattr(company_bot, 'enable_web_search', False) and iteration == 0 and not response_data:
                     use_web_search = True
                     logger.info('[tool_loop] LLM returned empty response — retrying with web search enabled')
                     continue
-                return result
+                response_data, extra, finish = result
+                return self._with_turn_usage(response_data, extra, finish, turn_usage)
 
             tool_name = response_data['function_call'].get('name', '')
             arguments = response_data['function_call'].get('arguments', {})
 
             if tool_name not in self._executable_tools:
                 logger.info(f'[tool_loop] passing through tool={tool_name} to process_response')
+                response_data, extra, finish = result
                 if retrieved_chunks:
-                    response_data, extra, finish = result
                     extra = extra or {}
                     extra['_retrieved_chunks'] = retrieved_chunks
-                    return response_data, extra, finish
-                return result
+                return self._with_turn_usage(response_data, extra, finish, turn_usage)
 
             logger.info(f'[tool_loop] iteration={iteration} executing tool={tool_name}')
 
@@ -507,7 +515,7 @@ class BaseResponseHandler(ABC):
 
     def _call_gateway_non_stream(
         self, gateway_messages, company_bot, session_id, profile_id, tools, tool_choice,
-        retrieved_chunks=None, append_to_last=False, use_web_search=False,
+        retrieved_chunks=None, append_to_last=False, use_web_search=False, turn_usage=None,
     ):
         """Single non-streaming LLM call, returns (response, extra, finish_reason)."""
         import json
@@ -520,9 +528,15 @@ class BaseResponseHandler(ABC):
                 messages=gateway_messages, provider=company_bot.provider, model=company_bot.llm_model,
                 params=params, tools=tools, tool_choice=tool_choice,
             )
-            print("Data from llm gateway: ", data)
+            logger.info(f"[gateway] raw response: {data}")
             if not data:
                 return None, None, None
+
+            usage_cost = self._extract_usage_cost(data)
+            if usage_cost:
+                self._update_session_usage(session_id, usage_cost)
+                if turn_usage is not None:
+                    self._accumulate_usage(turn_usage, usage_cost)
 
             choice = data.get('choices', [{}])[0]
             message = choice.get('message', {})
@@ -550,8 +564,8 @@ class BaseResponseHandler(ABC):
                 ru_args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
                 if 'response' not in ru_args:
                     content = message.get('content', '') or ''
-                    quick_reply_chips = ru_args.get('quick_reply_chips')
-                    finalized_sources = ru_args.get('finalized_sources')
+                    quick_reply_chips = self._parse_if_string(ru_args.get('quick_reply_chips'), [])
+                    finalized_sources = self._parse_if_string(ru_args.get('finalized_sources'), [])
 
                     if finalized_sources is not None:
                         self._save_finalized_sources(session_id, finalized_sources)
@@ -595,6 +609,7 @@ class BaseResponseHandler(ABC):
                     session_id=session_id, profile_id=profile_id, initiated_by='AI',
                     message=content, chunks=all_chunks, status=ChatStatus.IN_PROGRESS, stage=None,
                     append_to_last=append_to_last,
+                    other_params={'usage': usage_cost} if usage_cost else None,
                 )
             sources = self._prepare_sources(all_chunks)
             extra = {'sources': sources} if sources else None
@@ -608,7 +623,7 @@ class BaseResponseHandler(ABC):
     def _handle_gateway_stream(
         self, gateway_messages, company_bot, session_id, profile_id, tools, tool_choice,
         channel_name, cache_policy=None, metadata=None, retrieved_chunks=None, append_to_last=False,
-        use_web_search=False,
+        use_web_search=False, turn_usage=None,
     ):
         import json
         accumulated_content = []
@@ -620,7 +635,8 @@ class BaseResponseHandler(ABC):
                 stream_params.pop('web_search_options', None)
             print(f'[stream] use_web_search={use_web_search} bot.enable_web_search={getattr(company_bot, "enable_web_search", "N/A")} web_search_in_params={"web_search_options" in stream_params}')
             citation_chunks = []
-            for delta_content, tool_use_delta, chunk_finish_reason, chunk_citations in call_llm_gateway_stream(
+            finish_chunk = None
+            for delta_content, tool_use_delta, chunk_finish_reason, chunk_citations, chunk_finish_data in call_llm_gateway_stream(
                 messages=gateway_messages, provider=company_bot.provider, model=company_bot.llm_model,
                 params=stream_params, tools=tools, tool_choice=tool_choice,
                 cache_policy=cache_policy, metadata=metadata,
@@ -641,6 +657,14 @@ class BaseResponseHandler(ABC):
                     citation_chunks.extend(self._extract_citation_chunks_from_stream(chunk_citations))
                 if chunk_finish_reason:
                     finish_reason = chunk_finish_reason
+                if chunk_finish_data:
+                    finish_chunk = chunk_finish_data
+
+            usage_cost = self._extract_usage_cost(finish_chunk)
+            if usage_cost:
+                self._update_session_usage(session_id, usage_cost)
+                if turn_usage is not None:
+                    self._accumulate_usage(turn_usage, usage_cost)
 
             if tool_calls_buffer:
                 tc = tool_calls_buffer[0]
@@ -657,8 +681,8 @@ class BaseResponseHandler(ABC):
                 if tc['name'] == 'respond_to_user' and 'response' not in tc_arguments:
                     # New format: text was already streamed token-by-token; tool call carries metadata only
                     content = ''.join(accumulated_content)
-                    quick_reply_chips = tc_arguments.get('quick_reply_chips')
-                    finalized_sources = tc_arguments.get('finalized_sources')
+                    quick_reply_chips = self._parse_if_string(tc_arguments.get('quick_reply_chips'), [])
+                    finalized_sources = self._parse_if_string(tc_arguments.get('finalized_sources'), [])
 
                     if finalized_sources is not None:
                         self._save_finalized_sources(session_id, finalized_sources)
@@ -679,6 +703,7 @@ class BaseResponseHandler(ABC):
                             session_id=session_id, profile_id=profile_id, initiated_by='AI',
                             message=content, chunks=all_chunks, status=ChatStatus.IN_PROGRESS,
                             stage=None, append_to_last=append_to_last,
+                            other_params={'usage': usage_cost} if usage_cost else None,
                         )
                         self._send_chunk(channel_name, '', finish_reason='stop',
                                          extra_content={k: v for k, v in extra_content.items()
@@ -708,12 +733,14 @@ class BaseResponseHandler(ABC):
 
             # No tool call — content was already streamed token-by-token; save to DB
             content = ''.join(accumulated_content)
+            logger.info(f"[gateway] raw stream response: {content}")
             all_chunks = list(retrieved_chunks or []) + citation_chunks
             if content:
                 save_in_company_db(
                     session_id=session_id, profile_id=profile_id, initiated_by='AI',
                     message=content, chunks=all_chunks, status=ChatStatus.IN_PROGRESS, stage=None,
                     append_to_last=append_to_last,
+                    other_params={'usage': usage_cost} if usage_cost else None,
                 )
             sources = self._prepare_sources(all_chunks)
             extra_content = {'sources': sources} if sources else None
@@ -783,6 +810,77 @@ class BaseResponseHandler(ABC):
                 if url or title:
                     chunks.append({'text': text, 'title': title, 'url': url})
         return chunks
+
+    def _parse_if_string(self, value, fallback):
+        """Some models (e.g. Llama) return arrays/objects as JSON strings inside tool args. Parse them."""
+        if not isinstance(value, str):
+            return value
+        try:
+            import json as _json
+            parsed = _json.loads(value)
+            return parsed if isinstance(parsed, type(fallback)) else fallback
+        except Exception:
+            return fallback
+
+    def _with_turn_usage(self, response_data, extra, finish, turn_usage):
+        """Return a (response, extra, finish) tuple with turn_usage injected into extra."""
+        if any(turn_usage.values()):
+            extra = dict(extra) if isinstance(extra, dict) else {}
+            extra['_usage_cost'] = dict(turn_usage)
+        return response_data, extra or None, finish
+
+    def _accumulate_usage(self, accumulator, usage_cost):
+        """Add a single call's usage_cost into a running accumulator dict."""
+        for k in ('input_tokens', 'output_tokens', 'total_tokens'):
+            accumulator[k] = accumulator.get(k, 0) + (usage_cost.get(k) or 0)
+        accumulator['cost_usd'] = round(accumulator.get('cost_usd', 0) + (usage_cost.get('cost_usd') or 0), 6)
+
+    def _update_last_chat_usage(self, session_id, usage_cost):
+        """Merge usage cost into the most recently saved AI CompanyChat for this session."""
+        from chatbot.models import CompanyChat
+        try:
+            chat = CompanyChat.objects.filter(
+                session=session_id, sender__id=1
+            ).order_by('-id').first()
+            if chat:
+                other_params = chat.other_params or {}
+                other_params['usage'] = usage_cost
+                chat.other_params = other_params
+                chat.save(update_fields=['other_params'])
+                logger.info(f"[usage] saved turn usage to CompanyChat id={chat.id} usage={usage_cost}")
+        except Exception as e:
+            logger.error(f'[_update_last_chat_usage] failed: {e}')
+
+    def _extract_usage_cost(self, data):
+        """Extract token usage and cost from a raw gateway response dict."""
+        if not data:
+            return None
+        usage = data.get('usage', {}) or {}
+        cost = data.get('cost', {}) or {}
+        result = {
+            'input_tokens': usage.get('input_tokens', 0) or 0,
+            'output_tokens': usage.get('output_tokens', 0) or 0,
+            'total_tokens': usage.get('total_tokens', 0) or 0,
+            'cost_usd': cost.get('computed_usd', 0) or 0,
+        }
+        return result if any(result.values()) else None
+
+    def _update_session_usage(self, session_id, usage_cost):
+        """Accumulate token usage and cost into ChatSession.other_params['usage']."""
+        try:
+            session = ChatSession.objects.get(session=session_id)
+            other_params = session.other_params or {}
+            usage = other_params.get('usage', {})
+            usage['total_input_tokens'] = usage.get('total_input_tokens', 0) + usage_cost['input_tokens']
+            usage['total_output_tokens'] = usage.get('total_output_tokens', 0) + usage_cost['output_tokens']
+            usage['total_tokens'] = usage.get('total_tokens', 0) + usage_cost['total_tokens']
+            usage['total_cost_usd'] = round(usage.get('total_cost_usd', 0) + usage_cost['cost_usd'], 6)
+            other_params['usage'] = usage
+            session.other_params = other_params
+            session.save(update_fields=['other_params'])
+            logger.info(f"[usage] session {session_id} totals updated: {usage}")
+        except Exception as e:
+            logger.error(f'[_update_session_usage] failed: {e}')
 
     def _save_finalized_sources(self, session_id, finalized_sources):
         """Persist finalized_sources from respond_to_user into ChatSession.other_params."""

@@ -129,13 +129,13 @@ def call_llm_gateway_stream(
                 except _json.JSONDecodeError:
                     continue
                 if current_event == 'token':
-                    yield chunk.get('delta') or '', None, None, None
+                    yield chunk.get('delta') or '', None, None, None, None
                 elif current_event == 'tool_use':
-                    yield '', chunk, None, None
+                    yield '', chunk, None, None, None
                 elif current_event == 'citation':
                     collected_citations.append(chunk)
                 elif current_event == 'finish':
-                    yield '', None, chunk.get('finish_reason'), collected_citations or None
+                    yield '', None, chunk.get('finish_reason'), collected_citations or None, chunk
 
     except requests.exceptions.Timeout:
         logger.error('LLM gateway stream request timed out for model %s', model)

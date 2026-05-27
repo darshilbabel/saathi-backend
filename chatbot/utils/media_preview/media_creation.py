@@ -10,6 +10,39 @@ from chatbot.models.enums import MediaTypeChoices
 logger = logging.getLogger('django')
 
 
+def _add_hyperlink(paragraph, url, text):
+    """Insert a clickable hyperlink run into a python-docx paragraph."""
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+    r_id = paragraph.part.relate_to(
+        url,
+        'http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink',
+        is_external=True,
+    )
+    hyperlink = OxmlElement('w:hyperlink')
+    hyperlink.set(qn('r:id'), r_id)
+
+    run_elem = OxmlElement('w:r')
+    rpr = OxmlElement('w:rPr')
+
+    color = OxmlElement('w:color')
+    color.set(qn('w:val'), '0563C1')
+    rpr.append(color)
+
+    underline = OxmlElement('w:u')
+    underline.set(qn('w:val'), 'single')
+    rpr.append(underline)
+
+    run_elem.append(rpr)
+
+    t = OxmlElement('w:t')
+    t.text = text
+    run_elem.append(t)
+
+    hyperlink.append(run_elem)
+    paragraph._p.append(hyperlink)
+
+
 def create_pdf_from_text(text_content, company_bot_id) -> bytes:
     """
     Create a PDF file from text content using Gotenberg HTML-to-PDF service.
@@ -378,8 +411,11 @@ def create_docx_from_args(
             for src in resolved_sources:
                 src_title = src.get('title', '')
                 src_url = src.get('url', '')
-                label = f'{src_title} — {src_url}' if src_url else src_title
-                doc.add_paragraph(label)
+                para = doc.add_paragraph()
+                if src_url:
+                    _add_hyperlink(para, url=src_url, text=src_title or src_url)
+                else:
+                    para.add_run(src_title)
 
         buf = io.BytesIO()
         doc.save(buf)
