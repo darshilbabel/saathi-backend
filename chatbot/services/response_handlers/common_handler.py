@@ -863,15 +863,34 @@ class CommonResponseHandler(BaseResponseHandler):
             if not docx_url:
                 logger.error(f'[download_file] DOCX failed: {docx_result.get("error")}')
 
+            if not pdf_url and not docx_url:
+                logger.error('[download_file] Both failed — retrying once')
+                pdf_result = render_template_to_pdf(
+                    flow_name=flow_name, arguments=arguments,
+                    company_bot_id=company_bot.id, session_id=session_id, sources=finalized_sources,
+                )
+                docx_result = create_docx_from_args(
+                    arguments=arguments,
+                    company_bot_id=company_bot.id, session_id=session_id, sources=finalized_sources,
+                )
+                pdf_url = pdf_result.get('media_url') if pdf_result.get('success') else None
+                docx_url = docx_result.get('media_url') if docx_result.get('success') else None
+                logger.info(f'[download_file] retry result — pdf_url={pdf_url} docx_url={docx_url}')
+
             logger.info(f'[download_file] pdf_url={pdf_url} docx_url={docx_url}')
 
-            bot_message = arguments.get('bot_message', f"Your file '{filename}' is ready to download.")
-
-            extra_content_to_send = {}
+            download = {}
             if pdf_url:
-                extra_content_to_send['pdf_url'] = pdf_url
+                download['pdf_url'] = pdf_url
             if docx_url:
-                extra_content_to_send['docx_url'] = docx_url
+                download['docx_url'] = docx_url
+
+            if not download:
+                bot_message = self.default_error_message
+                extra_content_to_send = {}
+            else:
+                bot_message = arguments.get('bot_message', f"Your file '{filename}' is ready to download.")
+                extra_content_to_send = {'download': download}
 
             preamble_already_sent = (kwargs.get('llm_extra_content') or {}).get('_text_streamed_to_ws', False)
             if preamble_already_sent:
