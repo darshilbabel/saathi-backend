@@ -364,10 +364,8 @@ def create_docx_from_args(
 
         doc = docx.Document()
 
-        title_text = os.path.splitext(arguments.get('filename', 'Document'))[0].replace('_', ' ').replace('-', ' ')
-
         if is_mip:
-            doc.add_heading(title_text, level=1)
+            doc.add_heading('School Improvement Plan', level=1)
 
             if arguments.get('goal'):
                 doc.add_heading('Goal', level=2)
