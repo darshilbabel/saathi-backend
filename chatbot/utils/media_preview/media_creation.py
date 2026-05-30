@@ -383,13 +383,22 @@ def create_docx_from_args(
 
             action_plan = arguments.get('action_plan') or []
             if action_plan:
+                from docx.shared import Inches
                 doc.add_heading('Action plan', level=2)
-                table = doc.add_table(rows=0, cols=2)
+                table = doc.add_table(rows=1, cols=3)
                 table.style = 'Table Grid'
+                header_cells = table.rows[0].cells
+                header_cells[0].text = '#'
+                header_cells[1].text = 'Action'
+                header_cells[2].text = 'Week'
+                table.columns[0].width = Inches(0.4)
+                table.columns[1].width = Inches(5.0)
+                table.columns[2].width = Inches(1.1)
                 for i, step in enumerate(action_plan):
                     row = table.add_row().cells
-                    row[0].text = f"{i + 1}. {step.get('action', '')}"
-                    row[1].text = step.get('week', '')
+                    row[0].text = str(i + 1)
+                    row[1].text = step.get('action', '')
+                    row[2].text = step.get('week', '')
 
             success_indicators = arguments.get('success_indicators') or []
             if success_indicators:
