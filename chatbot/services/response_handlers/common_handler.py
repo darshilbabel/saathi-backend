@@ -7,7 +7,6 @@ from chatbot.celery_tasks.handle_message import translate_and_send_message
 import logging
 import json
 from json_repair import repair_json
-from chatbot.utils.media_preview.media_creation import create_and_upload_file
 
 logger = logging.getLogger('django')
 
@@ -143,6 +142,12 @@ class CommonResponseHandler(BaseResponseHandler):
         if super().is_function_call(response):
             return True
 
+        # JSON response tools (e.g. process_user_input) are not state machine calls
+        if isinstance(response, dict) and 'function_call' in response:
+            fc_name = response['function_call'].get('name', '')
+            if fc_name and fc_name != 'get_state_information':
+                return False
+
         # Check for OpenAI Responses API function call format
         if isinstance(response, dict):
             if response.get('finish_reason') == 'function_call' and 'function_call' in response:
@@ -213,6 +218,16 @@ class CommonResponseHandler(BaseResponseHandler):
         print(f"DEBUG: kwargs keys: {list(kwargs.keys())}")
         print(f"DEBUG: streaming_completed in kwargs: {'streaming_completed' in kwargs}")
         print(f"DEBUG: streaming_completed value: {kwargs.get('streaming_completed', 'NOT SET')}")
+
+        # Route non-state-machine function calls to the appropriate handler.
+        _freeflow_action_tools = {'download_file'}
+        _json_message_tools = {'process_user_input', 'respond_to_user'}
+        if isinstance(response, dict) and 'function_call' in response:
+            fc_name = response.get('function_call', {}).get('name', '')
+            if fc_name in _freeflow_action_tools:
+                return self._handle_freeflow_function_call(response, chat_session, chunks, **kwargs)
+            elif fc_name in _json_message_tools:
+                return self._handle_json_tool_response(response, chat_session, chunks, **kwargs)
 
         retry_attempt = kwargs.get('retry_attempt', 0)
         print(f"DEBUG: Current retry attempt: {retry_attempt}")
@@ -677,6 +692,13 @@ class CommonResponseHandler(BaseResponseHandler):
             response=response, company_bot=company_bot
         )
 
+        llm_extra_content = kwargs.get('llm_extra_content')
+        if llm_extra_content:
+            if extra_content:
+                extra_content.update(llm_extra_content)
+            else:
+                extra_content = llm_extra_content
+
         if streaming_completed:
             print("Streaming already completed - skipping duplicate processing")
             logger.info("Streaming already completed - skipping duplicate processing")
@@ -711,12 +733,11 @@ class CommonResponseHandler(BaseResponseHandler):
     def _handle_response_extra_content(self, response, company_bot):
         extra_content = None
         if company_bot.bot_type == CompanyBotTypeChoices.SIMPLE:
-            if company_bot.provider == LLMProvider.BEDROCK_CONVERSE:
-                if response and isinstance(response, dict):
-                    extracted_data = response.pop("parameters", response.pop("input", None))
-                    if extracted_data and isinstance(extracted_data, dict):
-                        response.clear()
-                        response.update(extracted_data)
+            if response and isinstance(response, dict):
+                extracted_data = response.pop("parameters", response.pop("input", None))
+                if extracted_data and isinstance(extracted_data, dict):
+                    response.clear()
+                    response.update(extracted_data)
 
         print("Updated response post clean: ", response)
         logger.info(f"Updated response post clean: {response}")
@@ -733,7 +754,7 @@ class CommonResponseHandler(BaseResponseHandler):
             if tag_context:
                 tag_context = json_repair.repair_json(tag_context, return_objects=True)
 
-            message = response.get("message", "")
+            message = response.get("message") or response.get("response", "")
             validation = response.get("validation")
 
             if response.get("should_move_forward") == 'yes':
@@ -741,9 +762,38 @@ class CommonResponseHandler(BaseResponseHandler):
             elif tag_context and validation:
                 message = tag_context.get(validation, message)
 
+            quick_reply_chips = response.get("quick_reply_chips")
+            if quick_reply_chips is not None:
+                extra_content["quick_reply_chips"] = quick_reply_chips
+
             response = message
 
         return response, extra_content
+
+    def _handle_json_tool_response(self, response, chat_session, chunks, **kwargs):
+        """Handle tool calls where the arguments ARE the response (e.g. process_user_input)."""
+        arguments = response['function_call'].get('arguments', {})
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                arguments = repair_json(arguments, return_objects=True)
+
+        # Persist finalized_sources from respond_to_user so the orchestrator can inject them into the next prompt
+        finalized_sources = arguments.get('finalized_sources')
+        if finalized_sources is not None:
+            other_params = chat_session.other_params or {}
+            other_params['finalized_sources'] = finalized_sources
+            chat_session.other_params = other_params
+            chat_session.save(update_fields=['other_params'])
+
+        return self._handle_regular_response(
+            response=arguments,
+            chat_session=chat_session,
+            chunks=chunks,
+            current_step=chat_session.current_step,
+            **kwargs
+        )
 
     def _handle_freeflow_function_call(self, response, chat_session, chunks, **kwargs):
         """Handle function calls for FREE_FLOW bots (like download_file)"""
@@ -777,91 +827,105 @@ class CommonResponseHandler(BaseResponseHandler):
         
         # Handle download_file function
         if function_name == 'download_file':
-            filename = arguments.get('filename', 'download.pdf')
-            content_type = arguments.get('content_type', 'pdf')
-            
-            # Get the file search content and sources from response
-            file_search_content = response.get('content', '')
-            extra_content_data = response.get('extra_content', {})
-            sources = extra_content_data.get('sources', [])
-            
-            # Get the content parameter from function arguments (contains explanation from file_search)
-            content_from_args = arguments.get('content', '')
-            
-            logger.info(f"Download request - filename: {filename}, type: {content_type}")
-            logger.info(f"Available sources: {len(sources)}")
-            logger.info(f"📄 File search content length: {len(file_search_content)} chars")
-            logger.info(f"📝 Content from function args: {len(content_from_args)} chars")
-            logger.info(f"🎯 Function call detected: {function_name}")
-            
-            # Create and upload file to S3
-            file_result = create_and_upload_file(
-                content=content_from_args,
-                filename=filename,
+            from chatbot.models.chat_models import ChatSession as _ChatSession
+            from chatbot.utils.media_preview.media_creation import render_template_to_pdf, create_docx_from_args
+
+            filename = arguments.get('filename', 'download')
+
+            # flow_name stored as session_type during WebSocket authenticate
+            _session = _ChatSession.objects.filter(session=session_id).first()
+            flow_name = _session.session_type if _session else None
+
+            # Use finalized_sources accumulated by respond_to_user across the session
+            finalized_sources = (chat_session.other_params or {}).get('finalized_sources') or []
+
+            logger.info(f'[download_file] flow_name={flow_name!r} filename={filename!r} sources={len(finalized_sources)}')
+
+            pdf_result = render_template_to_pdf(
+                flow_name=flow_name,
+                arguments=arguments,
                 company_bot_id=company_bot.id,
-                session_id=session_id
+                session_id=session_id,
+                sources=finalized_sources,
             )
-            
-            # Check if file creation was successful
-            file_url = None
-            if file_result.get('success'):
-                file_url = file_result.get('media_url')
-                logger.info(f"✅ File uploaded successfully: {file_url}")
-                print(f"DEBUG: File uploaded successfully: {file_url}")
-            else:
-                logger.error(f"❌ File upload failed: {file_result.get('error')}")
-                print(f"DEBUG: File upload failed: {file_result.get('error')}")
-            
-            # Use content from function arguments as the main message (contains the explanation)
-            # If content is available, show it; otherwise use a default message
-            bot_message = arguments.get(
-                "bot_message",
-                f"Your file '{filename}' is ready. You can download it below."
+            docx_result = create_docx_from_args(
+                arguments=arguments,
+                company_bot_id=company_bot.id,
+                session_id=session_id,
+                sources=finalized_sources,
             )
 
-            logger.info(f"Sending download acknowledgment with {len(bot_message)} chars")
-            logger.info(f"Function call detected internally: {function_name} with args: {arguments.keys()}")
-            logger.info(f"File search content available: {len(response.get('content', ''))} chars")
-            
-            # Prepare extra_content with sources and file_url (standardized format)
-            extra_content_to_send = {}
-            if sources:
-                extra_content_to_send['sources'] = sources
-            if file_url:
-                extra_content_to_send['file_url'] = file_url
-                logger.info(f"📎 Adding file_url to extra_content: {file_url}")
-            
-            # Include sources and file_url in extra_content for frontend display
-            translated_message = translate_and_send_message(
-                accumulated_message=bot_message,
-                current_channel_name=channel_name,
-                current_step_number=chat_session.current_step,
-                finish_reason="stop",  # Use 'stop' instead of 'function_call' to hide function call from frontend
-                route=language,
-                company_bot=company_bot,
-                extra_content=extra_content_to_send if extra_content_to_send else None
-            )
-            
-            # Save to database with function call metadata for internal tracking
+            pdf_url = pdf_result.get('media_url') if pdf_result.get('success') else None
+            docx_url = docx_result.get('media_url') if docx_result.get('success') else None
+
+            if not pdf_url:
+                logger.error(f'[download_file] PDF failed: {pdf_result.get("error")}')
+            if not docx_url:
+                logger.error(f'[download_file] DOCX failed: {docx_result.get("error")}')
+
+            if not pdf_url and not docx_url:
+                logger.error('[download_file] Both failed — retrying once')
+                pdf_result = render_template_to_pdf(
+                    flow_name=flow_name, arguments=arguments,
+                    company_bot_id=company_bot.id, session_id=session_id, sources=finalized_sources,
+                )
+                docx_result = create_docx_from_args(
+                    arguments=arguments,
+                    company_bot_id=company_bot.id, session_id=session_id, sources=finalized_sources,
+                )
+                pdf_url = pdf_result.get('media_url') if pdf_result.get('success') else None
+                docx_url = docx_result.get('media_url') if docx_result.get('success') else None
+                logger.info(f'[download_file] retry result — pdf_url={pdf_url} docx_url={docx_url}')
+
+            logger.info(f'[download_file] pdf_url={pdf_url} docx_url={docx_url}')
+
+            download = {}
+            if pdf_url:
+                download['pdf_url'] = pdf_url
+            if docx_url:
+                download['docx_url'] = docx_url
+
+            if not download:
+                bot_message = self.default_error_message
+                extra_content_to_send = {}
+            else:
+                bot_message = arguments.get('bot_message', f"Your file '{filename}' is ready to download.")
+                extra_content_to_send = {'download': download}
+
+            preamble_already_sent = (kwargs.get('llm_extra_content') or {}).get('_text_streamed_to_ws', False)
+            if preamble_already_sent:
+                # Text was already streamed token-by-token; send URLs as stop chunk without repeating text
+                self._send_chunk(channel_name, '', finish_reason='stop',
+                                 extra_content=extra_content_to_send if extra_content_to_send else None)
+                translated_message = bot_message
+            else:
+                translated_message = translate_and_send_message(
+                    accumulated_message=bot_message,
+                    current_channel_name=channel_name,
+                    current_step_number=chat_session.current_step,
+                    finish_reason='stop',
+                    route=language,
+                    company_bot=company_bot,
+                    extra_content=extra_content_to_send if extra_content_to_send else None,
+                )
+
             save_in_company_db(
                 session_id=session_id,
                 profile_id=profile_id,
                 initiated_by='AI',
                 message=bot_message,
-                chunks=None,
+                chunks=chunks,
                 status=ChatStatus.IN_PROGRESS,
                 translated_message=translated_message,
                 stage=None,
                 other_params={
-                    'function_call': function_name, 
+                    'function_call': function_name,
                     'arguments': arguments,
-                    'file_search_content': response.get('content', ''),  # Store file_search content
-                    'sources': response.get('extra_content', {}).get('sources', []),
-                    'file_url': file_url,  # Store the uploaded file URL
-                    'file_result': file_result  # Store full upload result for debugging
-                }
+                    'pdf_url': pdf_url,
+                    'docx_url': docx_url,
+                },
             )
-            
+
             return bot_message
         else:
             logger.warning(f"Unknown function call: {function_name}")

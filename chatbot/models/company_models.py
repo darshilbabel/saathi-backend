@@ -13,7 +13,7 @@ from chatbot.models.enums import (
     FeedbackChoices, CompanyBotTypeChoices, CompanyBotDynamicContextType, CompanyChatSourceChoices,
     VoiceProvider, VoiceType, LLMProvider, EntityTypeChoices, TextConversionType,
     PreProcessType, PreProcessOutputMode, PostProcessType, PostProcessOutputMode,
-    UserTypeChoices, OperationTypeChoices, BotStrategyChoices
+    UserTypeChoices, OperationTypeChoices, BotStrategyChoices, WebSearchContextSize
 )
 
 S3_BASE_URL = os.getenv('S3_BASE_URL')
@@ -85,8 +85,8 @@ class CompanyBot(models.Model):
                   "for each response."
     )
     provider = models.CharField(
-        max_length=100, choices=LLMProvider.choices, default=LLMProvider.BEDROCK_CONVERSE,
-        help_text="Select the LLM provider (BEDROCK, BEDROCK_CONVERSE, or OPENAI)"
+        max_length=100, choices=LLMProvider.choices, default=LLMProvider.BEDROCK,
+        help_text="Select the LLM provider (BEDROCK, ANTHROPIC, or OPENAI)"
     )
     provider_keys = models.TextField(
         default="", max_length=1000, null=False, blank=True,
@@ -153,9 +153,24 @@ class CompanyBot(models.Model):
     )
     stream = models.BooleanField(
         default=False,
+        help_text="Enable streaming mode for LLM responses."
+    )
+    use_vector_service = models.BooleanField(
+        default=False,
         help_text=(
-            "Enable streaming mode for LLM responses."
+            "Enable vector knowledge base search. Uses a two-step LLM call: "
+            "first to extract the search query, then to answer with retrieved context."
         )
+    )
+    enable_web_search = models.BooleanField(
+        default=False,
+        help_text="Enable web search via the LLM gateway."
+    )
+    web_search_context_size = models.CharField(
+        max_length=10,
+        choices=WebSearchContextSize.choices,
+        default=WebSearchContextSize.MEDIUM,
+        help_text="Amount of context the web search retrieves. Only used when enable_web_search is True."
     )
 
     history = HistoricalRecords()
@@ -642,4 +657,3 @@ class PDFTemplates(models.Model):
             models.Index(fields=['template_name']),
             models.Index(fields=['user_type']),
         ]
-

@@ -10,6 +10,39 @@ from chatbot.models.enums import MediaTypeChoices
 logger = logging.getLogger('django')
 
 
+def _add_hyperlink(paragraph, url, text):
+    """Insert a clickable hyperlink run into a python-docx paragraph."""
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+    r_id = paragraph.part.relate_to(
+        url,
+        'http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink',
+        is_external=True,
+    )
+    hyperlink = OxmlElement('w:hyperlink')
+    hyperlink.set(qn('r:id'), r_id)
+
+    run_elem = OxmlElement('w:r')
+    rpr = OxmlElement('w:rPr')
+
+    color = OxmlElement('w:color')
+    color.set(qn('w:val'), '0563C1')
+    rpr.append(color)
+
+    underline = OxmlElement('w:u')
+    underline.set(qn('w:val'), 'single')
+    rpr.append(underline)
+
+    run_elem.append(rpr)
+
+    t = OxmlElement('w:t')
+    t.text = text
+    run_elem.append(t)
+
+    hyperlink.append(run_elem)
+    paragraph._p.append(hyperlink)
+
+
 def create_pdf_from_text(text_content, company_bot_id) -> bytes:
     """
     Create a PDF file from text content using Gotenberg HTML-to-PDF service.
@@ -220,33 +253,197 @@ def text_to_html(text_content, company_bot_id) -> str:
     return html_template
 
 
-def sanitize_filename(filename: str) -> str:
-    """
-    Sanitize filename and ensure it has .pdf extension.
-    """
+def sanitize_filename(filename: str, extension: str = '.pdf') -> str:
+    """Sanitize filename and enforce the given extension."""
+    ext = extension if extension.startswith('.') else f'.{extension}'
     try:
-        # Remove any path separators
         filename = os.path.basename(filename)
-        
-        # Remove extension if present
         name_without_ext = os.path.splitext(filename)[0]
-        
-        # Replace any invalid characters
         safe_name = "".join(c for c in name_without_ext if c.isalnum() or c in (' ', '-', '_'))
-        
-        # Remove extra spaces and replace with underscores
         safe_name = '_'.join(safe_name.split())
-        
-        # Ensure it's not empty
         if not safe_name:
             safe_name = "download"
-        
-        # Add .pdf extension
-        return f"{safe_name}.pdf"
-        
+        return f"{safe_name}{ext}"
     except Exception as e:
         logger.error(f"Error sanitizing filename: {e}")
-        return "download.pdf"
+        return f"download{ext}"
+
+
+def render_template_to_pdf(
+    *,
+    flow_name: str,
+    arguments: dict,
+    company_bot_id: int,
+    session_id: str,
+    sources: list = None,
+) -> dict:
+    """
+    Look up the PDFTemplate for the flow (by flow_route), render it with Jinja2,
+    generate a PDF via Gotenberg, and upload to S3.
+
+    Falls back to create_and_upload_file if no template is found.
+    """
+    from jinja2 import Template
+    from chatbot.models.company_models import Flow, PDFTemplates
+    from chatbot.models.chat_models import ChatSession
+
+    try:
+        print("flow_route: ", flow_name)
+        flow = Flow.objects.filter(flow_route=flow_name).first() if flow_name else None
+        print("Flow found: ", flow)
+        pdf_template = PDFTemplates.objects.filter(flow=flow).first() if flow else None
+        print("PDF Template: ", pdf_template)
+
+        logger.info(f'[render_template_to_pdf] flow_name={flow_name!r} flow={flow} pdf_template={pdf_template}')
+
+        if not pdf_template:
+            logger.info(
+                f'[render_template_to_pdf] No PDFTemplate found for flow_route={flow_name!r} — falling back to text-based PDF'
+            )
+            fallback_content = arguments.get('knowledge_content') or str(arguments)
+            return create_and_upload_file(
+                content=fallback_content,
+                filename=arguments.get('filename', 'download.pdf'),
+                company_bot_id=company_bot_id,
+                session_id=session_id,
+            )
+
+        chat_session = ChatSession.objects.filter(session=session_id).first()
+        profile = chat_session.profile if chat_session else None
+
+        context = {
+            'args': arguments,
+            'constants': pdf_template.constants_json or {},
+            'profile': profile,
+            'sources': sources or arguments.get('sources') or [],
+        }
+
+        html_content = Template(pdf_template.template).render(**context)
+
+        pdf_content = generate_pdf_with_gotenberg(html_content)
+        if not pdf_content:
+            raise Exception('Gotenberg failed to generate PDF from template')
+
+        safe_filename = sanitize_filename(arguments.get('filename', 'download.pdf'), '.pdf')
+        s3_key = upload_file_to_s3(
+            file_name=safe_filename,
+            file_content=pdf_content,
+            content_type=MediaTypeChoices.PDF,
+            project_id=None,
+            folder_structure=f'chatbot/{company_bot_id}/{session_id}/',
+        )
+
+        if not s3_key:
+            return {'success': False, 'error': 'Failed to upload PDF to S3'}
+
+        return {'success': True, 'media_url': f'{os.getenv("S3_MEDIA_URL")}{s3_key}', 'file_name': safe_filename}
+
+    except Exception as e:
+        logger.error(f'[render_template_to_pdf] Error: {e}', exc_info=True)
+        return {'success': False, 'error': str(e)}
+
+
+def create_docx_from_args(
+    *,
+    arguments: dict,
+    company_bot_id: int,
+    session_id: str,
+    sources: list = None,
+) -> dict:
+    """
+    Generate a DOCX file directly from download_file tool call arguments (no template model).
+    MIP documents get structured sections; knowledge documents get the raw content.
+    """
+    import io
+    import docx
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    try:
+        is_mip = bool(arguments.get('goal') or arguments.get('action_plan'))
+        safe_filename = sanitize_filename(arguments.get('filename', 'download.docx'), '.docx')
+
+        doc = docx.Document()
+
+        if is_mip:
+            doc.add_heading('School Improvement Plan', level=1)
+
+            if arguments.get('goal'):
+                doc.add_heading('Goal', level=2)
+                doc.add_paragraph(arguments['goal'])
+
+            if arguments.get('objective'):
+                doc.add_heading('Objective', level=2)
+                doc.add_paragraph(arguments['objective'])
+
+            if arguments.get('duration'):
+                doc.add_heading('Timeline', level=2)
+                doc.add_paragraph(f"Duration: {arguments['duration']}")
+
+            action_plan = arguments.get('action_plan') or []
+            if action_plan:
+                from docx.shared import Inches
+                doc.add_heading('Action plan', level=2)
+                table = doc.add_table(rows=1, cols=3)
+                table.style = 'Table Grid'
+                header_cells = table.rows[0].cells
+                header_cells[0].text = '#'
+                header_cells[1].text = 'Action'
+                header_cells[2].text = 'Week'
+                table.columns[0].width = Inches(0.4)
+                table.columns[1].width = Inches(5.0)
+                table.columns[2].width = Inches(1.1)
+                for i, step in enumerate(action_plan):
+                    row = table.add_row().cells
+                    row[0].text = str(i + 1)
+                    row[1].text = step.get('action', '')
+                    row[2].text = step.get('week', '')
+
+            success_indicators = arguments.get('success_indicators') or []
+            if success_indicators:
+                doc.add_heading('Success indicators', level=2)
+                for i, indicator in enumerate(success_indicators):
+                    doc.add_paragraph(f"{i + 1}. {indicator}")
+
+        else:
+            doc.add_heading(title_text, level=1)
+            content = arguments.get('knowledge_content', '')
+            for para in content.split('\n\n'):
+                para = para.strip()
+                if para:
+                    doc.add_paragraph(para)
+
+        resolved_sources = sources or arguments.get('sources') or []
+        if resolved_sources:
+            doc.add_heading('References', level=2)
+            for src in resolved_sources:
+                src_title = src.get('title', '')
+                src_url = src.get('url', '')
+                para = doc.add_paragraph()
+                if src_url:
+                    _add_hyperlink(para, url=src_url, text=src_title or src_url)
+                else:
+                    para.add_run(src_title)
+
+        buf = io.BytesIO()
+        doc.save(buf)
+        docx_bytes = buf.getvalue()
+
+        s3_key = upload_file_to_s3(
+            file_name=safe_filename,
+            file_content=docx_bytes,
+            content_type=MediaTypeChoices.DOCX,
+            project_id=None,
+            folder_structure=f'chatbot/{company_bot_id}/{session_id}/',
+        )
+
+        if not s3_key:
+            return {'success': False, 'error': 'Failed to upload DOCX to S3'}
+
+        return {'success': True, 'media_url': f'{os.getenv("S3_MEDIA_URL")}{s3_key}', 'file_name': safe_filename}
+
+    except Exception as e:
+        logger.error(f'[create_docx_from_args] Error: {e}', exc_info=True)
+        return {'success': False, 'error': str(e)}
 
 
 def create_and_upload_file(
@@ -272,8 +469,7 @@ def create_and_upload_file(
         
         logger.info(f"PDF created successfully, size: {len(pdf_content)} bytes")
         
-        # Prepare folder structure: chatbot/<company_bot_id>/
-        folder_structure = f"chatbot/{company_bot_id}/"
+        folder_structure = f"chatbot/{company_bot_id}/{session_id}/"
         
         # Upload to S3
         s3_key = upload_file_to_s3(

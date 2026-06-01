@@ -1,4 +1,5 @@
 import base64
+import json
 from django.core.files.base import ContentFile
 from django.utils.timezone import now
 from celery import shared_task
@@ -10,10 +11,19 @@ from chatbot.models.geo_models import ProfileAddress
 channel_layer = get_channel_layer()
 
 
+def _safe_json_dumps(value):
+    if value is None:
+        return None
+    try:
+        return json.dumps(value)
+    except (TypeError, ValueError):
+        return None
+
+
 @shared_task
 def save_in_company_db(
         session_id, profile_id, initiated_by, message, chunks, status, translated_message=None, audio_base64=None,
-        stage=None, other_params=None
+        stage=None, other_params=None, append_to_last=False
 ):
     if initiated_by == 'AI':
         receiver = Profile.objects.filter(id=profile_id).first()
@@ -31,9 +41,12 @@ def save_in_company_db(
     #     audio_file=None
 
     if last_chat and last_chat.sender == sender:
-        last_chat.message = message
+        if append_to_last:
+            last_chat.message = (last_chat.message or '') + '\n\n' + message
+        else:
+            last_chat.message = message
         last_chat.translated_message = translated_message
-        last_chat.chunks = chunks
+        last_chat.chunks = _safe_json_dumps(chunks)
         last_chat.status = status
         if audio_base64:
             if last_chat.file_url:
@@ -48,7 +61,7 @@ def save_in_company_db(
         company_chat = CompanyChat(
             message=message,
             translated_message=translated_message,
-            chunks=chunks,
+            chunks=_safe_json_dumps(chunks),
             sender=sender,
             receiver=receiver,
             session=session_id,

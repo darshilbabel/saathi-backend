@@ -3,8 +3,8 @@ from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 from chatbot.celery_tasks.common_chat_tasks import save_in_company_db
 from chatbot.celery_tasks.handle_message import translate_and_send_message
-from chatbot.llm_models.llm_script import handle_bedrock_model, handle_openai_response_api
-from chatbot.models import ChatSession, ChatStatus, LLMProvider, CompanyBotTypeChoices
+from chatbot.llm_models.llm_gateway import build_gateway_params, call_llm_gateway, call_llm_gateway_stream
+from chatbot.models import ChatSession, ChatStatus, CompanyBotTypeChoices
 from chatbot.models.company_models import CompanyStateMachine
 from chatbot.models.enums import OperationTypeChoices, PreProcessOutputMode
 from chatbot.services.postprocessing.postprocessing_service import PostprocessingService
@@ -24,6 +24,9 @@ class BaseResponseHandler(ABC):
         self.postprocessing_service = PostprocessingService()
         self.min_word_count = 3
         self.max_retry_attempts = 2
+        self._executable_tools = {'search_knowledge_base'}
+        self._gateway_handled_tools = {'web_search'}
+        self._metadata_tools = {'respond_to_user'}
 
     def _is_response_too_short(self, response):
         """
@@ -150,7 +153,14 @@ class BaseResponseHandler(ABC):
 
             if isinstance(result, tuple):
                 response, extra_content, finish_reason = result
-                
+
+                # Pull out chunks accumulated during tool loop (KB search before pass-through tool)
+                if isinstance(extra_content, dict) and '_retrieved_chunks' in extra_content:
+                    chunks = extra_content.pop('_retrieved_chunks') or []
+
+                if isinstance(extra_content, dict) and '_usage_cost' in extra_content:
+                    kwargs['_usage_cost'] = extra_content.pop('_usage_cost')
+
                 # Store extra_content if present for later use
                 if extra_content:
                     kwargs['llm_extra_content'] = extra_content
@@ -233,9 +243,13 @@ class BaseResponseHandler(ABC):
                 except CompanyStateMachine.DoesNotExist:
                     logger.info(f"Next state machine {next_stage_number} not found, likely at end of flow")
 
-        return self.process_response(
+        process_result = self.process_response(
             response, chat_session, chunks, streaming_completed=streaming_completed, **kwargs
         )
+        _usage_cost = kwargs.get('_usage_cost')
+        if _usage_cost:
+            self._update_last_chat_usage(session_id, _usage_cost)
+        return process_result
 
     def analyze_response_for_postprocessing(self, response):
         """Analyze if response needs postprocessing - can be overridden by subclasses"""
@@ -261,7 +275,7 @@ class BaseResponseHandler(ABC):
         system_prompt = kwargs['system_prompt']
         response = None
         message_to_send = self.get_messages_for_llm(**kwargs)
-        print("message_to_send: ", message_to_send)
+
         session_id = kwargs['session_id']
         profile_id = kwargs.get('profile_id')
         channel_name = kwargs['channel_name']
@@ -306,168 +320,578 @@ class BaseResponseHandler(ABC):
                 logger.error(f"Failed to parse state machine tool_context: {e}")
                 tools = None
 
-        if company_bot.provider == LLMProvider.BEDROCK_CONVERSE:
-            try:
-                response = handle_bedrock_model(
-                    system_prompt=system_prompt,
-                    messages=message_to_send,
-                    model_name=company_bot.llm_model,
-                    temperature=company_bot.bot_temperature,
-                    max_token=company_bot.max_token,
-                    company_bot=company_bot,
-                    tools=tools
+        result = self._handle_gateway_response(
+            system_prompt=system_prompt, messages=message_to_send, company_bot=company_bot,
+            session_id=session_id, profile_id=profile_id, tools=tools, channel_name=channel_name,
+        )
+
+        if result is None or (isinstance(result, tuple) and result[0] is None):
+            logger.error("LLM gateway response returned None")
+            return None, None, None
+
+        response, extra_content, finish_reason = result
+        return response, extra_content, finish_reason
+
+
+    def _handle_gateway_response(
+        self, system_prompt, messages, company_bot, session_id, profile_id, tools=None, channel_name=None,
+    ):
+        import json as _json
+
+        tool_choice = None
+        if isinstance(tools, dict):
+            tool_choice = tools.get('tool_choice', 'auto')
+            tools = tools.get('tools') or tools.get('tool')
+        elif isinstance(tools, list):
+            tool_choice = 'auto'
+
+        gateway_messages = []
+        if system_prompt:
+            gateway_messages.append({'role': 'system', 'content': system_prompt})
+        gateway_messages += messages
+
+        other = company_bot.other_params or {}
+        cache_policy = other.get('cache_policy')
+        metadata_param = other.get('metadata')
+        use_stream = self.should_use_streaming(company_bot) and channel_name
+
+        current_messages = gateway_messages
+        current_tools = tools
+        current_tool_choice = tool_choice
+        retrieved_chunks = []
+        append_to_last = False
+        max_iterations = 5
+        turn_usage = {'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0, 'cost_usd': 0.0}
+
+        # If the KB tool is present, web search is held back until KB returns nothing (fallback).
+        # If there is no KB tool, respect enable_web_search from the bot config immediately.
+        has_kb_tool = any(
+            (t.get('function', {}).get('name') or t.get('name', '')) == 'search_knowledge_base'
+            for t in (tools or [])
+        )
+        use_web_search = False if has_kb_tool else getattr(company_bot, 'enable_web_search', False)
+        empty_respond_to_user_retried = False
+
+        for iteration in range(max_iterations):
+            if use_stream:
+                result = self._handle_gateway_stream(
+                    gateway_messages=current_messages, company_bot=company_bot,
+                    session_id=session_id, profile_id=profile_id, tools=current_tools,
+                    tool_choice=current_tool_choice, channel_name=channel_name,
+                    cache_policy=cache_policy, metadata=metadata_param,
+                    retrieved_chunks=retrieved_chunks, append_to_last=append_to_last,
+                    use_web_search=use_web_search, turn_usage=turn_usage,
                 )
-            except Exception as e:
-                logger.error(f"Bedrock Error: %s", e)
-                response = None
-
-        elif company_bot.provider == LLMProvider.OPENAI:
-            use_streaming = self.should_use_streaming(company_bot)
-
-            logger.info(f"Using OpenAI {'streaming' if use_streaming else 'non-streaming'} for session {session_id}")
-
-            result = self._handle_openai_response(
-                system_prompt=system_prompt,
-                messages=message_to_send,
-                company_bot=company_bot,
-                channel_name=channel_name,
-                session_id=session_id,
-                profile_id=profile_id,
-                stream=use_streaming
-            )
-
-            if result is None or (isinstance(result, tuple) and result[0] is None):
-                logger.error("OpenAI response returned None - error occurred")
-                response = None
-            elif isinstance(result, tuple):
-                response, extra_content, finish_reason = result
-
-                if extra_content:
-                    print("Setting extra_content to ", extra_content)
-                    kwargs['llm_extra_content'] = extra_content
-
-                return response, extra_content, finish_reason
             else:
-                response = result
-        return response, None, None
-
-    def _handle_openai_response(self, system_prompt, messages, company_bot,
-                                channel_name, session_id, profile_id, stream=False):
-        """
-        Handle OpenAI response using handle_openai_response_api.
-        Works for both streaming and non-streaming modes.
-        Supports both file_search and function calling tools.
-        """
-        final_extra_content = None
-        function_call_result = None
-
-        try:
-            logger.info(f"Processing free-flow for session {session_id}, channel {channel_name}")
-
-            tools = None
-            tool_choice = None
-            try:
-                import json_repair
-                tool_context = json_repair.repair_json(company_bot.tool_context, return_objects=True)
-                if tool_context:
-                    # Handle both formats: flat array or dict with "tool" key
-                    if isinstance(tool_context, list):
-                        tools = tool_context
-                        tool_choice = "auto"
-                    elif isinstance(tool_context, dict):
-                        tools = tool_context.get("tool")
-                        tool_choice = tool_context.get("tool_choice", "auto")
-
-                logger.info("Using state machine tool_context")
-            except Exception as e:
-                logger.error(f"Failed to parse state machine tool_context: {e}", exc_info=True)
-                print(f"❌ Error parsing tool_context: {e}")
-
-            accumulated_response = ""
-            finish_reason = None
-
-            for chunk_data in handle_openai_response_api(
-                    messages=messages,
-                    system_prompt=system_prompt,
-                    max_token=company_bot.max_token if company_bot.max_token else 2048,
-                    temperature=company_bot.bot_temperature if company_bot.bot_temperature is not None else 0.0,
-                    company_bot=company_bot,
-                    top_p=company_bot.filter_score if company_bot.filter_score else None,
-                    tool_choice=tool_choice,
-                    tools=tools,
-                    stream=stream
-            ):
-                content = chunk_data.get('content', '')
-                finish_reason = chunk_data.get('finish_reason')
-                error = chunk_data.get('error')
-                extra_content = chunk_data.get('extra_content')
-                function_call = chunk_data.get('function_call')
-
-                if error:
-                    logger.error(f'OpenAI error: {error}')
-                    if stream:
-                        self._send_error_chunk(channel_name, "Error processing your request")
-                    return None
-
-                # Handle function call response
-                if function_call:
-                    function_call_result = function_call
-                    logger.info(f"Function call received: {function_call['name']}")
-                    logger.info(f"Function arguments: {function_call.get('arguments', {})}")
-                    # Don't send function_call via WebSocket here - it will be handled by common_handler
-                    # This prevents duplicate WebSocket messages
-
-                if content:
-                    accumulated_response += content
-
-                if extra_content:
-                    print("got extra_content: ", extra_content)
-                    final_extra_content = extra_content
-
-                print(f"Finish reason: {finish_reason}")
-
-                if stream:
-                    if content:
-                        self._send_chunk(channel_name, content, None, None)
-
-                    if finish_reason == "stop":
-                        self._send_chunk(
-                            channel_name,
-                            "",
-                            "stop",
-                            final_extra_content
-                        )
-            # If function call was made, return it for processing
-            if function_call_result:
-                logger.info(f"Returning function call result: {function_call_result}")
-                # Return function call as response dict with finish_reason
-                response_dict = {
-                    'function_call': function_call_result,
-                    'finish_reason': 'function_call',
-                    'extra_content': final_extra_content  # Include sources if available
-                }
-                return response_dict, final_extra_content, 'function_call'
-            
-            if accumulated_response:
-                save_in_company_db(
-                    session_id=session_id,
-                    profile_id=profile_id,
-                    initiated_by='AI',
-                    message=accumulated_response,
-                    chunks=None,
-                    status=ChatStatus.IN_PROGRESS,
-                    stage=None
+                result = self._call_gateway_non_stream(
+                    gateway_messages=current_messages, company_bot=company_bot,
+                    session_id=session_id, profile_id=profile_id,
+                    tools=current_tools, tool_choice=current_tool_choice,
+                    retrieved_chunks=retrieved_chunks, append_to_last=append_to_last,
+                    use_web_search=use_web_search, turn_usage=turn_usage,
                 )
 
-                logger.info(f'Completed OpenAI response, length: {len(accumulated_response)} chars')
+            print(f'[tool_loop] iteration={iteration} result={str(result)[:200]}')
 
-            return accumulated_response, final_extra_content, finish_reason
+            print("="*50)
+            print("Result: ", result)
+            print("="*50)
+
+            if not result or (isinstance(result, tuple) and result[0] is None):
+                return None, None, None
+
+            response_data, extra, finish = result
+
+            if not (isinstance(response_data, dict) and 'function_call' in response_data):
+                if isinstance(extra, dict) and extra.pop('_respond_to_user_handled', False):
+                    if not response_data and not empty_respond_to_user_retried:
+                        empty_respond_to_user_retried = True
+                        logger.info('[tool_loop] respond_to_user called with no text — retrying with correction')
+                        current_messages = list(current_messages) + [
+                            {
+                                'role': 'assistant', 'content': None,
+                                'tool_calls': [{'id': 'tu_empty_retry', 'type': 'function',
+                                                'function': {'name': 'respond_to_user', 'arguments': '{}'}}],
+                            },
+                            {
+                                'role': 'tool', 'tool_call_id': 'tu_empty_retry',
+                                'name': 'respond_to_user',
+                                'content': 'Error: Response text is required. Write your full reply as plain text first, then call respond_to_user.',
+                            },
+                        ]
+                        continue
+                    if not response_data:
+                        logger.info('[tool_loop] respond_to_user still empty after retry — sending default error')
+                        return self.default_error_message, None, None
+                    return self._with_turn_usage(response_data, extra, finish, turn_usage)
+                # Web search held back for KB fallback. Only retry if LLM gave NO response at all —
+                # a non-empty answer is a deliberate choice (and streaming already sent those tokens).
+                if not use_web_search and getattr(company_bot, 'enable_web_search', False) and iteration == 0 and not response_data:
+                    use_web_search = True
+                    logger.info('[tool_loop] LLM returned empty response — retrying with web search enabled')
+                    continue
+                response_data, extra, finish = result
+                return self._with_turn_usage(response_data, extra, finish, turn_usage)
+
+            tool_name = response_data['function_call'].get('name', '')
+            arguments = response_data['function_call'].get('arguments', {})
+
+            if tool_name not in self._executable_tools:
+                logger.info(f'[tool_loop] passing through tool={tool_name} to process_response')
+                response_data, extra, finish = result
+                if retrieved_chunks:
+                    extra = extra or {}
+                    extra['_retrieved_chunks'] = retrieved_chunks
+                return self._with_turn_usage(response_data, extra, finish, turn_usage)
+
+            logger.info(f'[tool_loop] iteration={iteration} executing tool={tool_name}')
+
+            tool_result_text, new_chunks = self._execute_tool(
+                tool_name=tool_name, arguments=arguments, company_bot=company_bot,
+            )
+            retrieved_chunks.extend(new_chunks or [])
+
+            # If KB search found nothing and web search is configured, activate it for the next call
+            if tool_name == 'search_knowledge_base':
+                if not new_chunks:
+                    use_web_search = getattr(company_bot, 'enable_web_search', False)
+                    logger.info('[tool_loop] KB search empty — enabling web search for next iteration')
+                else:
+                    use_web_search = False
+
+            tool_call_id = f'tool_{iteration}'
+            args_str = _json.dumps(arguments) if isinstance(arguments, dict) else (arguments or '{}')
+            current_messages = list(current_messages) + [
+                {
+                    'role': 'assistant',
+                    'content': None,
+                    'tool_calls': [{
+                        'id': tool_call_id,
+                        'type': 'function',
+                        'function': {'name': tool_name, 'arguments': args_str},
+                    }],
+                },
+                {
+                    'role': 'tool',
+                    'tool_call_id': tool_call_id,
+                    'name': tool_name,
+                    'content': tool_result_text,
+                },
+            ]
+
+            # Remove executed tool so the LLM cannot call it again
+            current_tools = [
+                t for t in (current_tools or [])
+                if (t.get('function', {}).get('name') or t.get('name', '')) != tool_name
+            ] or None
+            current_tool_choice = 'auto' if current_tools else None
+            append_to_last = True
+
+        logger.error('[tool_loop] max tool iterations reached')
+        return self.default_error_message, None, 'stop'
+
+    def _execute_tool(self, tool_name, arguments, company_bot):
+        """Execute a tool call and return (result_text_for_llm, retrieved_chunks)."""
+        if tool_name == 'search_knowledge_base':
+            from chatbot.services.vector.vector_service import fetch_context_for_query
+            query = arguments.get('query', '') if isinstance(arguments, dict) else ''
+            _, retrieved_chunks = fetch_context_for_query(query=query, company_bot=company_bot)
+            if retrieved_chunks:
+                parts = []
+                for c in retrieved_chunks:
+                    title = c.get('title', '')
+                    url = c.get('url', '')
+                    text = c.get('text', '')
+                    header = f'[{title}]({url})' if url else title
+                    parts.append(f'Source: {header}\n{text}')
+                chunks_text = '\n\n---\n\n'.join(parts)
+            else:
+                chunks_text = 'No relevant results found in the knowledge base.'
+            logger.info(f'[tool_loop] search_knowledge_base: {len(retrieved_chunks)} chunks for query: {query}')
+            return chunks_text, retrieved_chunks
+
+        logger.error(f'[tool_loop] unknown tool: {tool_name}')
+        return f'Tool "{tool_name}" is not available.', []
+
+    def _call_gateway_non_stream(
+        self, gateway_messages, company_bot, session_id, profile_id, tools, tool_choice,
+        retrieved_chunks=None, append_to_last=False, use_web_search=False, turn_usage=None,
+    ):
+        """Single non-streaming LLM call, returns (response, extra, finish_reason)."""
+        import json
+        try:
+            params = build_gateway_params(company_bot)
+            if not use_web_search:
+                params.pop('web_search_options', None)
+            print(f'[non_stream] use_web_search={use_web_search} bot.enable_web_search={getattr(company_bot, "enable_web_search", "N/A")} web_search_in_params={"web_search_options" in params}')
+            data = call_llm_gateway(
+                messages=gateway_messages, provider=company_bot.provider, model=company_bot.llm_model,
+                params=params, tools=tools, tool_choice=tool_choice,
+            )
+            logger.info(f"[gateway] raw response: {data}")
+            if not data:
+                return None, None, None
+
+            usage_cost = self._extract_usage_cost(data)
+            if usage_cost:
+                self._update_session_usage(session_id, usage_cost)
+                if turn_usage is not None:
+                    self._accumulate_usage(turn_usage, usage_cost)
+
+            choice = data.get('choices', [{}])[0]
+            message = choice.get('message', {})
+            finish_reason = choice.get('finish_reason')
+            tool_calls = message.get('tool_calls') or []
+
+            executable_tc = next(
+                (tc for tc in tool_calls
+                 if (tc.get('function', {}).get('name') or tc.get('name', '')) in self._executable_tools),
+                None,
+            )
+            if executable_tc:
+                raw_args = executable_tc.get('function', {}).get('arguments', '{}')
+                arguments = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                return {'function_call': {'name': executable_tc['function']['name'], 'arguments': arguments}}, None, 'function_call'
+
+            # respond_to_user new format: LLM response text is in message.content; tool args are metadata only
+            respond_to_user_tc = next(
+                (tc for tc in tool_calls
+                 if (tc.get('function', {}).get('name') or tc.get('name', '')) == 'respond_to_user'),
+                None,
+            )
+            if respond_to_user_tc:
+                raw_args = respond_to_user_tc.get('function', {}).get('arguments', '{}')
+                ru_args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                if 'response' not in ru_args:
+                    content = message.get('content', '') or ''
+                    quick_reply_chips = self._parse_if_string(ru_args.get('quick_reply_chips'), [])
+                    finalized_sources = self._parse_if_string(ru_args.get('finalized_sources'), [])
+
+                    if finalized_sources is not None:
+                        self._save_finalized_sources(session_id, finalized_sources)
+
+                    citation_chunks = self._extract_citation_chunks(message)
+                    all_chunks = list(retrieved_chunks or []) + citation_chunks
+                    sources = self._prepare_sources(all_chunks)
+                    extra_content = {}
+                    if sources:
+                        extra_content['sources'] = sources
+                    if quick_reply_chips is not None:
+                        extra_content['quick_reply_chips'] = quick_reply_chips
+
+                    if all_chunks:
+                        extra_content['_retrieved_chunks'] = all_chunks
+
+                    extra_content['_respond_to_user_handled'] = True
+                    return content, extra_content or None, finish_reason
+                # old format (has 'response' key) — falls through to passthrough_tc below
+
+            # Pass-through tools: not executable by us and not handled by the gateway → return to process_response
+            passthrough_tc = next(
+                (tc for tc in tool_calls
+                 if (tc.get('function', {}).get('name') or tc.get('name', '')) not in self._gateway_handled_tools),
+                None,
+            )
+            if passthrough_tc:
+                tc_name = passthrough_tc.get('function', {}).get('name') or passthrough_tc.get('name', '')
+                raw_args = passthrough_tc.get('function', {}).get('arguments', '{}')
+                arguments = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                return {'function_call': {'name': tc_name, 'arguments': arguments}}, None, 'function_call'
+
+            content = message.get('content', '')
+            print(f'[non_stream_response] finish_reason={finish_reason} content={repr(content[:200])}')
+
+            citation_chunks = self._extract_citation_chunks(message)
+            all_chunks = list(retrieved_chunks or []) + citation_chunks
+
+            if content:
+                save_in_company_db(
+                    session_id=session_id, profile_id=profile_id, initiated_by='AI',
+                    message=content, chunks=all_chunks, status=ChatStatus.IN_PROGRESS, stage=None,
+                    append_to_last=append_to_last,
+                    other_params={'usage': usage_cost} if usage_cost else None,
+                )
+            sources = self._prepare_sources(all_chunks)
+            extra = {'sources': sources} if sources else None
+            return content, extra, finish_reason
 
         except Exception as e:
-            logger.error(f'Error in OpenAI response handling: {e}', exc_info=True)
-            if stream:
-                self._send_error_chunk(channel_name, "An error occurred processing your message")
+            logger.error(f'Error in non-stream gateway call: {e}', exc_info=True)
             return None, None, None
+
+
+    def _handle_gateway_stream(
+        self, gateway_messages, company_bot, session_id, profile_id, tools, tool_choice,
+        channel_name, cache_policy=None, metadata=None, retrieved_chunks=None, append_to_last=False,
+        use_web_search=False, turn_usage=None,
+    ):
+        import json
+        accumulated_content = []
+        tool_calls_buffer = {}  # index -> {id, name, arguments}
+        finish_reason = None
+        try:
+            stream_params = build_gateway_params(company_bot)
+            if not use_web_search:
+                stream_params.pop('web_search_options', None)
+            print(f'[stream] use_web_search={use_web_search} bot.enable_web_search={getattr(company_bot, "enable_web_search", "N/A")} web_search_in_params={"web_search_options" in stream_params}')
+            citation_chunks = []
+            finish_chunk = None
+            for delta_content, tool_use_delta, chunk_finish_reason, chunk_citations, chunk_finish_data in call_llm_gateway_stream(
+                messages=gateway_messages, provider=company_bot.provider, model=company_bot.llm_model,
+                params=stream_params, tools=tools, tool_choice=tool_choice,
+                cache_policy=cache_policy, metadata=metadata,
+            ):
+                if delta_content:
+                    self._send_chunk(channel_name, delta_content, finish_reason=None)
+                    accumulated_content.append(delta_content)
+                if tool_use_delta:
+                    idx = tool_use_delta.get('index', 0)
+                    if idx not in tool_calls_buffer:
+                        tool_calls_buffer[idx] = {'id': '', 'name': '', 'arguments': ''}
+                    if tool_use_delta.get('id'):
+                        tool_calls_buffer[idx]['id'] = tool_use_delta['id']
+                    if tool_use_delta.get('name'):
+                        tool_calls_buffer[idx]['name'] = tool_use_delta['name']
+                    tool_calls_buffer[idx]['arguments'] += tool_use_delta.get('arguments_delta') or ''
+                if chunk_citations:
+                    citation_chunks.extend(self._extract_citation_chunks_from_stream(chunk_citations))
+                if chunk_finish_reason:
+                    finish_reason = chunk_finish_reason
+                if chunk_finish_data:
+                    finish_chunk = chunk_finish_data
+
+            usage_cost = self._extract_usage_cost(finish_chunk)
+            if usage_cost:
+                self._update_session_usage(session_id, usage_cost)
+                if turn_usage is not None:
+                    self._accumulate_usage(turn_usage, usage_cost)
+
+            if tool_calls_buffer:
+                tc = tool_calls_buffer[0]
+                raw_args = tc['arguments']
+                print(f'[stream_tool_call] name={tc["name"]} args={raw_args[:200]}')
+                try:
+                    tc_arguments = json.loads(raw_args)
+                except json.JSONDecodeError:
+                    import json_repair
+                    tc_arguments = json_repair.repair_json(raw_args, return_objects=True)
+                if not isinstance(tc_arguments, dict):
+                    tc_arguments = {}
+
+                if tc['name'] == 'respond_to_user' and 'response' not in tc_arguments:
+                    # New format: text was already streamed token-by-token; tool call carries metadata only
+                    content = ''.join(accumulated_content)
+                    quick_reply_chips = self._parse_if_string(tc_arguments.get('quick_reply_chips'), [])
+                    finalized_sources = self._parse_if_string(tc_arguments.get('finalized_sources'), [])
+
+                    if finalized_sources is not None:
+                        self._save_finalized_sources(session_id, finalized_sources)
+
+                    all_chunks = list(retrieved_chunks or []) + citation_chunks
+                    sources = self._prepare_sources(all_chunks)
+                    extra_content = {}
+                    if sources:
+                        extra_content['sources'] = sources
+                    if quick_reply_chips is not None:
+                        extra_content['quick_reply_chips'] = quick_reply_chips
+                    # Marker consumed by _handle_gateway_response to skip web-search retry
+                    extra_content['_respond_to_user_handled'] = True
+
+                    if content:
+                        # Text was streamed token-by-token; save to DB and send stop chunk with chips
+                        save_in_company_db(
+                            session_id=session_id, profile_id=profile_id, initiated_by='AI',
+                            message=content, chunks=all_chunks, status=ChatStatus.IN_PROGRESS,
+                            stage=None, append_to_last=append_to_last,
+                            other_params={'usage': usage_cost} if usage_cost else None,
+                        )
+                        self._send_chunk(channel_name, '', finish_reason='stop',
+                                         extra_content={k: v for k, v in extra_content.items()
+                                                        if k != '_respond_to_user_handled'} or None)
+                        return content, extra_content, 'stop'
+                    else:
+                        # LLM generated no text — signal _handle_gateway_response to retry with correction
+                        return content, extra_content, None
+
+                # Any other tool call — preamble was already sent to WS token-by-token; only save to DB
+                preamble_streamed = bool(accumulated_content)
+                if accumulated_content:
+                    preamble = ''.join(accumulated_content)
+                    save_in_company_db(
+                        session_id=session_id, profile_id=profile_id, initiated_by='AI',
+                        message=preamble, chunks=None, status=ChatStatus.IN_PROGRESS, stage=None,
+                    )
+                all_chunks_for_tool = list(retrieved_chunks or []) + citation_chunks
+                extra_for_tool = {}
+                if all_chunks_for_tool:
+                    extra_for_tool['_retrieved_chunks'] = all_chunks_for_tool
+                if preamble_streamed:
+                    # Signal to process_response handlers that text was already sent to WS
+                    extra_for_tool['_text_streamed_to_ws'] = True
+                extra_for_tool = extra_for_tool or None
+                return {'function_call': {'name': tc['name'], 'arguments': tc_arguments}}, extra_for_tool, 'function_call'
+
+            # No tool call — content was already streamed token-by-token; save to DB
+            content = ''.join(accumulated_content)
+            logger.info(f"[gateway] raw stream response: {content}")
+            all_chunks = list(retrieved_chunks or []) + citation_chunks
+            if content:
+                save_in_company_db(
+                    session_id=session_id, profile_id=profile_id, initiated_by='AI',
+                    message=content, chunks=all_chunks, status=ChatStatus.IN_PROGRESS, stage=None,
+                    append_to_last=append_to_last,
+                    other_params={'usage': usage_cost} if usage_cost else None,
+                )
+            sources = self._prepare_sources(all_chunks)
+            extra_content = {'sources': sources} if sources else None
+            self._send_chunk(channel_name, '', finish_reason=finish_reason or 'stop', extra_content=extra_content)
+            return content, extra_content, finish_reason or 'stop'
+
+        except Exception as e:
+            logger.error(f'Error in gateway stream handling: {e}', exc_info=True)
+            return None, None, None
+
+    def _prepare_sources(self, chunks):
+        """Build deduplicated sources list from retrieved chunks for extra_content."""
+        print("="*100)
+        print("Chunks: ", chunks)
+        print("="*100)
+        if not chunks:
+            return []
+        seen = set()
+        sources = []
+        for chunk in chunks:
+            if not isinstance(chunk, dict):
+                continue
+            title = chunk.get('title', '')
+            url = chunk.get('url', '')
+            key = url or title
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            if url:
+                sources.append({'title': title, 'url': url})
+            else:
+                sources.append({'title': f'Referred: {title}'})
+        return sources
+
+    def _extract_citation_chunks(self, message):
+        """Extract web search citations from a non-stream gateway message and return as chunk dicts."""
+        citations_raw = message.get('citations') or []
+        chunks = []
+        for group in citations_raw:
+            if not isinstance(group, list):
+                continue
+            for citation in group:
+                if not isinstance(citation, dict):
+                    continue
+                url = citation.get('url', '')
+                title = citation.get('title', '')
+                text = citation.get('cited_text', '')
+                if url or title:
+                    chunks.append({'text': text, 'title': title, 'url': url})
+        return chunks
+
+    def _extract_citation_chunks_from_stream(self, citation_events):
+        """Extract web search citations from stream citation events and return as chunk dicts."""
+        chunks = []
+        for event in (citation_events or []):
+            if not isinstance(event, dict):
+                continue
+            # Gateway may send each citation event directly as a citation dict,
+            # or as a list of citation dicts under a key
+            candidates = event.get('citations') or event.get('results') or [event]
+            for item in candidates:
+                if not isinstance(item, dict):
+                    continue
+                url = item.get('url', '')
+                title = item.get('title', '')
+                text = item.get('cited_text', '') or item.get('text', '')
+                if url or title:
+                    chunks.append({'text': text, 'title': title, 'url': url})
+        return chunks
+
+    def _parse_if_string(self, value, fallback):
+        """Some models (e.g. Llama) return arrays/objects as JSON strings inside tool args. Parse them."""
+        if not isinstance(value, str):
+            return value
+        try:
+            import json as _json
+            parsed = _json.loads(value)
+            return parsed if isinstance(parsed, type(fallback)) else fallback
+        except Exception:
+            return fallback
+
+    def _with_turn_usage(self, response_data, extra, finish, turn_usage):
+        """Return a (response, extra, finish) tuple with turn_usage injected into extra."""
+        if any(turn_usage.values()):
+            extra = dict(extra) if isinstance(extra, dict) else {}
+            extra['_usage_cost'] = dict(turn_usage)
+        return response_data, extra or None, finish
+
+    def _accumulate_usage(self, accumulator, usage_cost):
+        """Add a single call's usage_cost into a running accumulator dict."""
+        for k in ('input_tokens', 'output_tokens', 'total_tokens'):
+            accumulator[k] = accumulator.get(k, 0) + (usage_cost.get(k) or 0)
+        accumulator['cost_usd'] = round(accumulator.get('cost_usd', 0) + (usage_cost.get('cost_usd') or 0), 6)
+
+    def _update_last_chat_usage(self, session_id, usage_cost):
+        """Merge usage cost into the most recently saved AI CompanyChat for this session."""
+        from chatbot.models import CompanyChat
+        try:
+            chat = CompanyChat.objects.filter(
+                session=session_id, sender__id=1
+            ).order_by('-id').first()
+            if chat:
+                other_params = chat.other_params or {}
+                other_params['usage'] = usage_cost
+                chat.other_params = other_params
+                chat.save(update_fields=['other_params'])
+                logger.info(f"[usage] saved turn usage to CompanyChat id={chat.id} usage={usage_cost}")
+        except Exception as e:
+            logger.error(f'[_update_last_chat_usage] failed: {e}')
+
+    def _extract_usage_cost(self, data):
+        """Extract token usage and cost from a raw gateway response dict."""
+        if not data:
+            return None
+        usage = data.get('usage', {}) or {}
+        cost = data.get('cost', {}) or {}
+        result = {
+            'input_tokens': usage.get('input_tokens', 0) or 0,
+            'output_tokens': usage.get('output_tokens', 0) or 0,
+            'total_tokens': usage.get('total_tokens', 0) or 0,
+            'cost_usd': cost.get('computed_usd', 0) or 0,
+        }
+        return result if any(result.values()) else None
+
+    def _update_session_usage(self, session_id, usage_cost):
+        """Accumulate token usage and cost into ChatSession.other_params['usage']."""
+        try:
+            session = ChatSession.objects.get(session=session_id)
+            other_params = session.other_params or {}
+            usage = other_params.get('usage', {})
+            usage['total_input_tokens'] = usage.get('total_input_tokens', 0) + usage_cost['input_tokens']
+            usage['total_output_tokens'] = usage.get('total_output_tokens', 0) + usage_cost['output_tokens']
+            usage['total_tokens'] = usage.get('total_tokens', 0) + usage_cost['total_tokens']
+            usage['total_cost_usd'] = round(usage.get('total_cost_usd', 0) + usage_cost['cost_usd'], 6)
+            other_params['usage'] = usage
+            session.other_params = other_params
+            session.save(update_fields=['other_params'])
+            logger.info(f"[usage] session {session_id} totals updated: {usage}")
+        except Exception as e:
+            logger.error(f'[_update_session_usage] failed: {e}')
+
+    def _save_finalized_sources(self, session_id, finalized_sources):
+        """Persist finalized_sources from respond_to_user into ChatSession.other_params."""
+        try:
+            session = ChatSession.objects.get(session=session_id)
+            other_params = session.other_params or {}
+            other_params['finalized_sources'] = finalized_sources
+            session.other_params = other_params
+            session.save(update_fields=['other_params'])
+        except Exception as e:
+            logger.error(f'[_save_finalized_sources] failed: {e}')
 
     def _send_chunk(self, channel_name, content, finish_reason, extra_content=None):
         """Send a chunk via channel layer to the WebSocket."""

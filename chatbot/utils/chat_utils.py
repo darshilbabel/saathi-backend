@@ -40,9 +40,28 @@ def format_message_as_per_openai_format(chats, intro=None):
                 'content': user_message
             })
         else:
+            content = chat_message or ''
+            if isinstance(chat, CompanyChat):
+                chat_chunks_raw = getattr(chat, 'chunks', None)
+                if chat_chunks_raw:
+                    try:
+                        chat_chunks = json.loads(chat_chunks_raw) if isinstance(chat_chunks_raw, str) else chat_chunks_raw
+                    except (json.JSONDecodeError, TypeError):
+                        chat_chunks = None
+                    if chat_chunks and isinstance(chat_chunks, list):
+                        source_lines = []
+                        for c in chat_chunks:
+                            if not isinstance(c, dict):
+                                continue
+                            title = c.get('title', '')
+                            url = c.get('url', '')
+                            if title or url:
+                                source_lines.append(f'- [{title}]({url})' if url else f'- {title}')
+                        if source_lines:
+                            content = content + '\n\n---\nSources used:\n' + '\n'.join(source_lines)
             messages.append({
                 'role': 'assistant',
-                "content": chat_message
+                'content': content
             })
     return messages
 
@@ -112,13 +131,7 @@ def format_message_as_per_bedrock_format(chats, intro=None, other_info=None):
 
 
 def get_guided_chat(company_bot, company_chats, intro=None, other_info=None):
-    messages = []
-    if company_bot.provider == LLMProvider.BEDROCK_CONVERSE:
-        messages = format_message_as_per_bedrock_format(chats=company_chats, intro=intro, other_info=other_info)
-    elif company_bot.provider == LLMProvider.OPENAI:
-        messages = format_message_as_per_openai_format(chats=company_chats, intro=intro)
-
-    return messages
+    return format_message_as_per_openai_format(chats=company_chats, intro=intro)
 
 
 def convert_llama_to_openai_tool(llama_tool_call):
