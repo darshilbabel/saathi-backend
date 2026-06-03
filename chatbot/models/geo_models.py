@@ -26,4 +26,4 @@ class ProfileAddress(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return self.profile.first_name
+        return self.profile.first_name or str(self.profile.email)
