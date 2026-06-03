@@ -836,6 +836,9 @@ class CommonResponseHandler(BaseResponseHandler):
                 return
 
             update_fields = []
+            if arguments.get('name'):
+                profile.first_name = arguments['name']
+                update_fields.append('first_name')
             if arguments.get('role'):
                 profile.designation = arguments['role']
                 update_fields.append('designation')
