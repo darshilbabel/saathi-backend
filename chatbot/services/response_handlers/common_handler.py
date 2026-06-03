@@ -223,12 +223,15 @@ class CommonResponseHandler(BaseResponseHandler):
         # Route non-state-machine function calls to the appropriate handler.
         _freeflow_action_tools = {'download_file'}
         _json_message_tools = {'process_user_input', 'respond_to_user'}
+        _profile_tools = {'submit_user_context'}
         if isinstance(response, dict) and 'function_call' in response:
             fc_name = response.get('function_call', {}).get('name', '')
             if fc_name in _freeflow_action_tools:
                 return self._handle_freeflow_function_call(response, chat_session, chunks, **kwargs)
             elif fc_name in _json_message_tools:
                 return self._handle_json_tool_response(response, chat_session, chunks, **kwargs)
+            elif fc_name in _profile_tools:
+                return self._handle_profile_tool_response(response, chat_session, chunks, **kwargs)
 
         retry_attempt = kwargs.get('retry_attempt', 0)
         print(f"DEBUG: Current retry attempt: {retry_attempt}")
@@ -795,6 +798,70 @@ class CommonResponseHandler(BaseResponseHandler):
             current_step=chat_session.current_step,
             **kwargs
         )
+
+    def _handle_profile_tool_response(self, response, chat_session, chunks, **kwargs):
+        """Handle submit_user_context — persist extracted context to Profile/ProfileAddress and inject into extra_content."""
+        arguments = response['function_call'].get('arguments', {})
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                arguments = repair_json(arguments, return_objects=True)
+
+        profile_id = kwargs.get('profile_id')
+        if profile_id:
+            self._save_submitted_user_context(profile_id, arguments)
+
+        llm_extra_content = kwargs.get('llm_extra_content') or {}
+        llm_extra_content['profile'] = arguments
+        llm_extra_content['profile_extracted'] = True
+        kwargs['llm_extra_content'] = llm_extra_content
+
+        return self._handle_regular_response(
+            response='',
+            chat_session=chat_session,
+            chunks=chunks,
+            current_step=chat_session.current_step,
+            **kwargs
+        )
+
+    def _save_submitted_user_context(self, profile_id, arguments):
+        """Persist submit_user_context arguments to Profile and ProfileAddress."""
+        from chatbot.models.profile_models import Profile
+        from chatbot.models.geo_models import ProfileAddress
+        try:
+            profile = Profile.objects.filter(id=profile_id).first()
+            if not profile:
+                logger.info(f'[submit_user_context] profile not found for id={profile_id}')
+                return
+
+            update_fields = []
+            if arguments.get('role'):
+                profile.designation = arguments['role']
+                update_fields.append('designation')
+            if arguments.get('school_name'):
+                profile.org_associated = arguments['school_name']
+                update_fields.append('org_associated')
+            if update_fields:
+                profile.save(update_fields=update_fields)
+                logger.info(f'[submit_user_context] updated Profile id={profile_id} fields={update_fields}')
+
+            district = arguments.get('district')
+            state = arguments.get('state')
+            if district or state:
+                address, created = ProfileAddress.objects.get_or_create(profile=profile)
+                addr_fields = []
+                if district:
+                    address.district = district
+                    addr_fields.append('district')
+                if state:
+                    address.state = state
+                    addr_fields.append('state')
+                address.save(update_fields=addr_fields)
+                logger.info(f'[submit_user_context] {"created" if created else "updated"} ProfileAddress for profile id={profile_id} fields={addr_fields}')
+
+        except Exception as e:
+            logger.error(f'[submit_user_context] failed to save profile context: {e}', exc_info=True)
 
     def _handle_freeflow_function_call(self, response, chat_session, chunks, **kwargs):
         """Handle function calls for FREE_FLOW bots (like download_file)"""
