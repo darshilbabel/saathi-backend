@@ -539,6 +539,14 @@ class Flow(models.Model):
         related_name='story_validation_flows',
         help_text="Optional secondary bot for story-related functionality."
     )
+    title_bot = models.ForeignKey(
+        CompanyBot,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='title_flows',
+        help_text="Optional bot for session title generation."
+    )
     websocket_url = models.CharField(
         max_length=500,
         help_text="WebSocket path for real-time communication (e.g., ws/common). Do not include protocol or host.",

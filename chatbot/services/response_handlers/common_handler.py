@@ -6,6 +6,7 @@ from chatbot.celery_tasks.common_chat_tasks import save_in_company_db
 from chatbot.celery_tasks.handle_message import translate_and_send_message
 import logging
 import json
+import os
 from json_repair import repair_json
 
 logger = logging.getLogger('django')
@@ -853,6 +854,7 @@ class CommonResponseHandler(BaseResponseHandler):
                 company_bot_id=company_bot.id,
                 session_id=session_id,
                 sources=finalized_sources,
+                flow_name=flow_name,
             )
 
             pdf_url = pdf_result.get('media_url') if pdf_result.get('success') else None
@@ -872,6 +874,7 @@ class CommonResponseHandler(BaseResponseHandler):
                 docx_result = create_docx_from_args(
                     arguments=arguments,
                     company_bot_id=company_bot.id, session_id=session_id, sources=finalized_sources,
+                    flow_name=flow_name,
                 )
                 pdf_url = pdf_result.get('media_url') if pdf_result.get('success') else None
                 docx_url = docx_result.get('media_url') if docx_result.get('success') else None
@@ -879,11 +882,16 @@ class CommonResponseHandler(BaseResponseHandler):
 
             logger.info(f'[download_file] pdf_url={pdf_url} docx_url={docx_url}')
 
+            _raw_filename = pdf_result.get('file_name') or docx_result.get('file_name')
+            display_filename = os.path.splitext(_raw_filename)[0] if _raw_filename else None
+
             download = {}
             if pdf_url:
                 download['pdf_url'] = pdf_url
             if docx_url:
                 download['docx_url'] = docx_url
+            if display_filename:
+                download['file_name'] = display_filename
 
             if not download:
                 bot_message = self.default_error_message

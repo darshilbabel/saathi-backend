@@ -269,6 +269,34 @@ def sanitize_filename(filename: str, extension: str = '.pdf') -> str:
         return f"download{ext}"
 
 
+def _get_flow_title(flow_name: str, fallback: str = 'Document') -> str:
+    """Return the title stored in PDFTemplates.constants_json['title'] for the given flow_route."""
+    try:
+        from chatbot.models.company_models import Flow, PDFTemplates
+        if not flow_name:
+            logger.info('[_get_flow_title] flow_name is None — using fallback')
+            return fallback
+        flow = Flow.objects.filter(flow_route=flow_name).first()
+        if not flow:
+            logger.info(f'[_get_flow_title] no Flow found for flow_route={flow_name!r} — using fallback')
+            return fallback
+        pdf_template = PDFTemplates.objects.filter(flow=flow).first()
+        if not pdf_template:
+            logger.info(f'[_get_flow_title] no PDFTemplates found for flow={flow} — using fallback')
+            return fallback
+        title = (pdf_template.constants_json or {}).get('doc_title')
+        if title:
+            logger.info(f'[_get_flow_title] using constants_json doc_title={title!r}')
+            return title
+        # Fall back to template_name if no title key in constants_json
+        if pdf_template.template_name:
+            logger.info(f'[_get_flow_title] no title in constants_json, using template_name={pdf_template.template_name!r}')
+            return pdf_template.template_name
+    except Exception as e:
+        logger.error(f'[_get_flow_title] error for flow_name={flow_name!r}: {e}')
+    return fallback
+
+
 def render_template_to_pdf(
     *,
     flow_name: str,
@@ -349,6 +377,7 @@ def create_docx_from_args(
     company_bot_id: int,
     session_id: str,
     sources: list = None,
+    flow_name: str = None,
 ) -> dict:
     """
     Generate a DOCX file directly from download_file tool call arguments (no template model).
@@ -361,11 +390,12 @@ def create_docx_from_args(
     try:
         is_mip = bool(arguments.get('goal') or arguments.get('action_plan'))
         safe_filename = sanitize_filename(arguments.get('filename', 'download.docx'), '.docx')
+        title_text = _get_flow_title(flow_name, fallback=arguments.get('title', 'Document'))
 
         doc = docx.Document()
 
         if is_mip:
-            doc.add_heading('School Improvement Plan', level=1)
+            doc.add_heading(title_text, level=1)
 
             if arguments.get('goal'):
                 doc.add_heading('Goal', level=2)
