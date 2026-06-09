@@ -216,18 +216,10 @@ def get_profile_view(request):
             profile.other_params and profile.other_params.get('is_tnc_accepted', False)
         )
 
-        has_address = ProfileAddress.objects.filter(
-            profile=profile,
-            state__isnull=False,
-            district__isnull=False,
-        ).exclude(state='').exclude(district='').exists()
-
-        is_profile_complete = bool(
-            profile.first_name and
-            profile.designation and
-            profile.org_associated and
-            has_address
+        is_onboarding_completed = bool(
+            profile.other_params and profile.other_params.get('is_onboarding_completed', False)
         )
+        is_profile_complete = is_onboarding_completed
 
         return Response({
             'id': profile.id,

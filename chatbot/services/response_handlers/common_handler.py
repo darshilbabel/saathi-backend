@@ -846,9 +846,12 @@ class CommonResponseHandler(BaseResponseHandler):
             if arguments.get('school_name'):
                 profile.org_associated = arguments['school_name']
                 update_fields.append('org_associated')
-            if update_fields:
-                profile.save(update_fields=update_fields)
-                logger.info(f'[submit_user_context] updated Profile id={profile_id} fields={update_fields}')
+            other_params = profile.other_params or {}
+            other_params['is_onboarding_completed'] = True
+            profile.other_params = other_params
+            update_fields.append('other_params')
+            profile.save(update_fields=update_fields)
+            logger.info(f'[submit_user_context] updated Profile id={profile_id} fields={update_fields}')
 
             district = arguments.get('district')
             state = arguments.get('state')
