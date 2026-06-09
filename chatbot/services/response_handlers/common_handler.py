@@ -1,9 +1,10 @@
-from chatbot.models import ChatStatus, CompanyChat, CompanyBotTypeChoices, LLMProvider, BotVernacular
+from chatbot.models import ChatStatus, CompanyChat, CompanyBotTypeChoices, LLMProvider, BotVernacular, Voice, VoiceType
 from chatbot.models.company_models import CompanyStateMachine
 from chatbot.services.response_handlers.base_response_handler import BaseResponseHandler
 from chatbot.utils.shiksha_chaupal.date_utils import handle_date_prompt
 from chatbot.celery_tasks.common_chat_tasks import save_in_company_db
 from chatbot.celery_tasks.handle_message import translate_and_send_message
+from chatbot.utils.audio_provider_utils import text_translate_provider
 import logging
 import json
 import os
@@ -866,6 +867,67 @@ class CommonResponseHandler(BaseResponseHandler):
         except Exception as e:
             logger.error(f'[submit_user_context] failed to save profile context: {e}', exc_info=True)
 
+    def _translate_download_arguments(self, arguments: dict, language: str, company_bot) -> dict:
+        if language == 'en':
+            return arguments
+
+        voice_provider = Voice.objects.filter(
+            company_bot=company_bot, type=VoiceType.TextToText, language=language
+        ).first()
+        if not voice_provider:
+            logger.info('[_translate_download_arguments] no TextToText voice provider for language=%s — skipping translation', language)
+            return arguments
+
+        def _translate(text, context=''):
+            try:
+                resp = text_translate_provider(
+                    voice_provider=voice_provider, message_body=text,
+                    target_language=language, source_language='en'
+                )
+                if resp.get('status') == 200:
+                    return resp.get('content') or text
+                logger.error(
+                    '[_translate_download_arguments] translation failed%s status=%s — falling back to original',
+                    f' ({context})' if context else '', resp.get('status')
+                )
+            except Exception as e:
+                logger.error(
+                    '[_translate_download_arguments] translation exception%s: %s — falling back to original',
+                    f' ({context})' if context else '', e, exc_info=True
+                )
+            return text
+
+        SKIP_KEYS = {'filename'}
+        translated = {}
+
+        for key, value in arguments.items():
+            if key in SKIP_KEYS:
+                translated[key] = value
+            elif isinstance(value, str):
+                translated[key] = _translate(value, context=key)
+            elif isinstance(value, list):
+                translated_list = []
+                for i, item in enumerate(value):
+                    if isinstance(item, str):
+                        translated_list.append(_translate(item, context=f'{key}[{i}]'))
+                    elif isinstance(item, dict):
+                        translated_item = {}
+                        for k, v in item.items():
+                            if isinstance(v, str):
+                                translated_item[k] = _translate(v, context=f'{key}[{i}].{k}')
+                            else:
+                                translated_item[k] = v
+                        translated_list.append(translated_item)
+                    else:
+                        translated_list.append(item)
+                translated[key] = translated_list
+            elif isinstance(value, (int, float)):
+                translated[key] = value
+            else:
+                translated[key] = value
+
+        return translated
+
     def _handle_freeflow_function_call(self, response, chat_session, chunks, **kwargs):
         """Handle function calls for FREE_FLOW bots (like download_file)"""
         
@@ -912,12 +974,16 @@ class CommonResponseHandler(BaseResponseHandler):
 
             logger.info(f'[download_file] flow_name={flow_name!r} filename={filename!r} sources={len(finalized_sources)}')
 
+            # Translate LLM-generated content fields to the user's language
+            arguments = self._translate_download_arguments(arguments, language, company_bot)
+
             pdf_result = render_template_to_pdf(
                 flow_name=flow_name,
                 arguments=arguments,
                 company_bot_id=company_bot.id,
                 session_id=session_id,
                 sources=finalized_sources,
+                language=language,
             )
             docx_result = create_docx_from_args(
                 arguments=arguments,
@@ -925,6 +991,7 @@ class CommonResponseHandler(BaseResponseHandler):
                 session_id=session_id,
                 sources=finalized_sources,
                 flow_name=flow_name,
+                language=language,
             )
 
             pdf_url = pdf_result.get('media_url') if pdf_result.get('success') else None
@@ -940,11 +1007,12 @@ class CommonResponseHandler(BaseResponseHandler):
                 pdf_result = render_template_to_pdf(
                     flow_name=flow_name, arguments=arguments,
                     company_bot_id=company_bot.id, session_id=session_id, sources=finalized_sources,
+                    language=language,
                 )
                 docx_result = create_docx_from_args(
                     arguments=arguments,
                     company_bot_id=company_bot.id, session_id=session_id, sources=finalized_sources,
-                    flow_name=flow_name,
+                    flow_name=flow_name, language=language,
                 )
                 pdf_url = pdf_result.get('media_url') if pdf_result.get('success') else None
                 docx_url = docx_result.get('media_url') if docx_result.get('success') else None

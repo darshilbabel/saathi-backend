@@ -9,6 +9,33 @@ channel_layer = get_channel_layer()
 logger = logging.getLogger('django')
 
 
+def _translate_chips(extra_content, voice_provider, route):
+    if not extra_content or not voice_provider:
+        return extra_content
+    chips = extra_content.get('quick_reply_chips')
+    if not chips:
+        return extra_content
+    translated = []
+    for chip in chips:
+        if not isinstance(chip, str):
+            translated.append(chip)
+            continue
+        try:
+            resp = text_translate_provider(
+                voice_provider=voice_provider, message_body=chip,
+                target_language=route, source_language='en'
+            )
+            if resp.get('status') == 200:
+                translated.append(resp.get('content') or chip)
+            else:
+                logger.error('[_translate_chips] chip translation failed status=%s — using original', resp.get('status'))
+                translated.append(chip)
+        except Exception as e:
+            logger.error('[_translate_chips] chip translation exception: %s — using original', e)
+            translated.append(chip)
+    return {**extra_content, 'quick_reply_chips': translated}
+
+
 def translate_and_send_message(
         accumulated_message, current_channel_name, current_step_number, finish_reason, route, company_bot,
         extra_content=None
@@ -29,6 +56,8 @@ def translate_and_send_message(
             translated_messages =  response.get('content')
         else:
             translated_messages = accumulated_message
+
+        extra_content = _translate_chips(extra_content, voice_provider, route)
 
         async_to_sync(channel_layer.send)(
             current_channel_name,

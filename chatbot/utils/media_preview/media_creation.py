@@ -304,6 +304,7 @@ def render_template_to_pdf(
     company_bot_id: int,
     session_id: str,
     sources: list = None,
+    language: str = 'en',
 ) -> dict:
     """
     Look up the PDFTemplate for the flow (by flow_route), render it with Jinja2,
@@ -339,9 +340,18 @@ def render_template_to_pdf(
         chat_session = ChatSession.objects.filter(session=session_id).first()
         profile = chat_session.profile if chat_session else None
 
+        _all_constants = pdf_template.constants_json or {}
+        _lang_constants = _all_constants.get(language) or _all_constants.get('en') or {}
+        _template_constants = dict(_lang_constants)
+        for k, v in list(_lang_constants.items()):
+            if k.endswith('_label'):
+                _template_constants.setdefault(k[:-6], v)
+            elif k.endswith('_prefix'):
+                _template_constants.setdefault(k[:-7], v)
         context = {
             'args': arguments,
-            'constants': pdf_template.constants_json or {},
+            'constants': _template_constants,
+            'language': language,
             'profile': profile,
             'sources': sources or arguments.get('sources') or [],
         }
@@ -378,6 +388,7 @@ def create_docx_from_args(
     session_id: str,
     sources: list = None,
     flow_name: str = None,
+    language: str = 'en',
 ) -> dict:
     """
     Generate a DOCX file directly from download_file tool call arguments (no template model).
@@ -387,10 +398,26 @@ def create_docx_from_args(
     import docx
     from docx.enum.text import WD_ALIGN_PARAGRAPH
 
+    lang_constants = {}
+    try:
+        from chatbot.models.company_models import Flow, PDFTemplates
+        if flow_name:
+            _flow = Flow.objects.filter(flow_route=flow_name).first()
+            if _flow:
+                _pdf_template = PDFTemplates.objects.filter(flow=_flow).first()
+                if _pdf_template and _pdf_template.constants_json:
+                    lang_constants = (
+                        _pdf_template.constants_json.get(language)
+                        or _pdf_template.constants_json.get('en')
+                        or {}
+                    )
+    except Exception as _e:
+        logger.error(f'[create_docx_from_args] failed to load lang_constants: {_e}')
+
     try:
         is_mip = bool(arguments.get('goal') or arguments.get('action_plan'))
         safe_filename = sanitize_filename(arguments.get('filename', 'download.docx'), '.docx')
-        title_text = _get_flow_title(flow_name, fallback=arguments.get('title', 'Document'))
+        title_text = lang_constants.get('doc_title') or _get_flow_title(flow_name, fallback=arguments.get('title', 'Document'))
 
         doc = docx.Document()
 
@@ -398,27 +425,27 @@ def create_docx_from_args(
             doc.add_heading(title_text, level=1)
 
             if arguments.get('goal'):
-                doc.add_heading('Goal', level=2)
+                doc.add_heading(lang_constants.get('goal_label', 'Goal'), level=2)
                 doc.add_paragraph(arguments['goal'])
 
             if arguments.get('objective'):
-                doc.add_heading('Objective', level=2)
+                doc.add_heading(lang_constants.get('objective_label', 'Objective'), level=2)
                 doc.add_paragraph(arguments['objective'])
 
             if arguments.get('duration'):
-                doc.add_heading('Timeline', level=2)
-                doc.add_paragraph(f"Duration: {arguments['duration']}")
+                doc.add_heading(lang_constants.get('timeline_label', 'Timeline'), level=2)
+                doc.add_paragraph(f"{lang_constants.get('duration_prefix', 'Duration')}: {arguments['duration']}")
 
             action_plan = arguments.get('action_plan') or []
             if action_plan:
                 from docx.shared import Inches
-                doc.add_heading('Action plan', level=2)
+                doc.add_heading(lang_constants.get('action_plan_label', 'Action plan'), level=2)
                 table = doc.add_table(rows=1, cols=3)
                 table.style = 'Table Grid'
                 header_cells = table.rows[0].cells
                 header_cells[0].text = '#'
-                header_cells[1].text = 'Action'
-                header_cells[2].text = 'Week'
+                header_cells[1].text = lang_constants.get('action_col_label', 'Action')
+                header_cells[2].text = lang_constants.get('week_label', 'Week')
                 table.columns[0].width = Inches(0.4)
                 table.columns[1].width = Inches(5.0)
                 table.columns[2].width = Inches(1.1)
@@ -430,7 +457,7 @@ def create_docx_from_args(
 
             success_indicators = arguments.get('success_indicators') or []
             if success_indicators:
-                doc.add_heading('Success indicators', level=2)
+                doc.add_heading(lang_constants.get('success_indicators_label', 'Success indicators'), level=2)
                 for i, indicator in enumerate(success_indicators):
                     doc.add_paragraph(f"{i + 1}. {indicator}")
 
@@ -444,7 +471,7 @@ def create_docx_from_args(
 
         resolved_sources = sources or arguments.get('sources') or []
         if resolved_sources:
-            doc.add_heading('References', level=2)
+            doc.add_heading(lang_constants.get('references_label', 'References'), level=2)
             for src in resolved_sources:
                 src_title = src.get('title', '')
                 src_url = src.get('url', '')

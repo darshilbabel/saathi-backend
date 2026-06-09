@@ -250,9 +250,9 @@ class AsyncSocketConsumer(AsyncBaseConsumer):
             if not chat_session:
                 return message
 
-            state_machine = CompanyStateMachine.objects.get(
+            state_machine = CompanyStateMachine.objects.filter(
                 company_bot=self.company_bot, step=chat_session.current_step
-            )
+            ).first()
 
             if state_machine and state_machine.text_conversion_type == TextConversionType.TRANSLITERATE:
                 transliterate_voice_provider = Voice.objects.filter(
