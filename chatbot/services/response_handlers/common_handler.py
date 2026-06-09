@@ -977,6 +977,25 @@ class CommonResponseHandler(BaseResponseHandler):
             # Translate LLM-generated content fields to the user's language
             arguments = self._translate_download_arguments(arguments, language, company_bot)
 
+            filename_base = os.path.splitext(filename)[0]
+            translated_filename = filename_base
+            if language != 'en':
+                try:
+                    filename_voice_provider = Voice.objects.filter(
+                        company_bot=company_bot, type=VoiceType.TextToText, language=language
+                    ).first()
+                    if filename_voice_provider:
+                        filename_translation_response = text_translate_provider(
+                            voice_provider=filename_voice_provider, message_body=filename_base,
+                            target_language=language, source_language='en'
+                        )
+                        if filename_translation_response.get('status') == 200:
+                            translated_filename = filename_translation_response.get('content') or filename_base
+                        else:
+                            logger.error('[download_file] filename translation failed status=%s — using original', filename_translation_response.get('status'))
+                except Exception as e:
+                    logger.error('[download_file] filename translation exception: %s — using original', e)
+
             pdf_result = render_template_to_pdf(
                 flow_name=flow_name,
                 arguments=arguments,
@@ -984,6 +1003,7 @@ class CommonResponseHandler(BaseResponseHandler):
                 session_id=session_id,
                 sources=finalized_sources,
                 language=language,
+                display_filename=translated_filename,
             )
             docx_result = create_docx_from_args(
                 arguments=arguments,
@@ -1007,7 +1027,7 @@ class CommonResponseHandler(BaseResponseHandler):
                 pdf_result = render_template_to_pdf(
                     flow_name=flow_name, arguments=arguments,
                     company_bot_id=company_bot.id, session_id=session_id, sources=finalized_sources,
-                    language=language,
+                    language=language, display_filename=translated_filename,
                 )
                 docx_result = create_docx_from_args(
                     arguments=arguments,
@@ -1021,7 +1041,7 @@ class CommonResponseHandler(BaseResponseHandler):
             logger.info(f'[download_file] pdf_url={pdf_url} docx_url={docx_url}')
 
             _raw_filename = pdf_result.get('file_name') or docx_result.get('file_name')
-            display_filename = os.path.splitext(_raw_filename)[0] if _raw_filename else None
+            display_filename = translated_filename if _raw_filename else None
 
             download = {}
             if pdf_url:

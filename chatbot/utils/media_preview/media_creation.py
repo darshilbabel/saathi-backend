@@ -305,6 +305,7 @@ def render_template_to_pdf(
     session_id: str,
     sources: list = None,
     language: str = 'en',
+    display_filename: str = None,
 ) -> dict:
     """
     Look up the PDFTemplate for the flow (by flow_route), render it with Jinja2,
@@ -342,15 +343,14 @@ def render_template_to_pdf(
 
         _all_constants = pdf_template.constants_json or {}
         _lang_constants = _all_constants.get(language) or _all_constants.get('en') or {}
-        _template_constants = dict(_lang_constants)
-        for k, v in list(_lang_constants.items()):
-            if k.endswith('_label'):
-                _template_constants.setdefault(k[:-6], v)
-            elif k.endswith('_prefix'):
-                _template_constants.setdefault(k[:-7], v)
+
+        template_args = dict(arguments)
+        if display_filename:
+            template_args['filename'] = display_filename
+
         context = {
-            'args': arguments,
-            'constants': _template_constants,
+            'args': template_args,
+            'constants': _lang_constants,
             'language': language,
             'profile': profile,
             'sources': sources or arguments.get('sources') or [],
