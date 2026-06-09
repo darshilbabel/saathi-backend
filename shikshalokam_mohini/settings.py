@@ -27,7 +27,7 @@ LOGGING_DIR = CODE_BASE_DIR + '/logs'
 
 def load_secrets():
     paths_to_try = [
-        '/home/ubuntu/shikshalokam-mohini-service/config/secrets.json',
+        '/home/ubuntu/saathi-backend/config/secrets.json',
         os.path.join(CODE_BASE_DIR, "config/secrets.json"),
         os.path.join(os.getcwd(), "config/secrets.json")
     ]
