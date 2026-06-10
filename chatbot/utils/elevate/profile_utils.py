@@ -72,11 +72,14 @@ def handle_elevate_profile(access_token):
                 'latest_flow_used': SessionFlowName.LoginMiStory,
                 'location': user_data.get('location'),
                 'designation': designation_value,
-                'other_params': {'elevate_profile_details': user_data},
                 'source': 'elevate',
                 'preferred_route': language,
             }
         )
+        existing_other_params = profile.other_params or {}
+        existing_other_params['elevate_profile_details'] = user_data
+        profile.other_params = existing_other_params
+        profile.save(update_fields=['other_params'])
 
         state = user_data.get('state', {})
         district = user_data.get('district', {})

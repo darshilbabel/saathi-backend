@@ -1,5 +1,6 @@
 import django_filters
 from rest_framework import generics
+from rest_framework.filters import OrderingFilter
 from rest_framework.response import Response
 from rest_framework import status
 from chatbot.filter.drf_filter import ChatSessionProfileFilter
@@ -65,8 +66,10 @@ class ProfileRetrieveUpdateDestroyView(generics.RetrieveUpdateAPIView):
 class ChatSessionListCreateView(generics.ListCreateAPIView):
     queryset = ChatSession.objects.all()
     serializer_class = ChatSessionSerializer
-    filter_backends = [django_filters.rest_framework.DjangoFilterBackend, ChatSessionProfileFilter]
+    filter_backends = [django_filters.rest_framework.DjangoFilterBackend, ChatSessionProfileFilter, OrderingFilter]
     filterset_fields = ['session', 'project_id', 'user_id', 'profile', 'session_type']
+    ordering_fields = ['updated_at', 'created_at', 'id']
+    ordering = ['-updated_at']
 
 
 class ChatSessionRetrieveUpdateDestroyView(generics.RetrieveUpdateAPIView):

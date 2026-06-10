@@ -41,6 +41,8 @@ router.register(r'media', MediaViewSet, basename='media')
 
 urlpatterns = [
     path('api/profile/', api_views.post_profile),
+    path('api/get-profile/', api_views.get_profile_view, name='get-profile'),
+    path('api/accept-tnc/', api_views.accept_tnc_view, name='accept-tnc'),
     path('api/user_profile/', ProfileListCreateView.as_view(), name='profile-list-create'),
 
     path('api/generate-session/', api_views.generate_session_id, name='generate_session_id'),

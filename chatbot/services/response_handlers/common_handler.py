@@ -1,11 +1,13 @@
-from chatbot.models import ChatStatus, CompanyChat, CompanyBotTypeChoices, LLMProvider, BotVernacular
+from chatbot.models import ChatStatus, CompanyChat, CompanyBotTypeChoices, LLMProvider, BotVernacular, Voice, VoiceType
 from chatbot.models.company_models import CompanyStateMachine
 from chatbot.services.response_handlers.base_response_handler import BaseResponseHandler
 from chatbot.utils.shiksha_chaupal.date_utils import handle_date_prompt
 from chatbot.celery_tasks.common_chat_tasks import save_in_company_db
 from chatbot.celery_tasks.handle_message import translate_and_send_message
+from chatbot.utils.audio_provider_utils import text_translate_provider
 import logging
 import json
+import os
 from json_repair import repair_json
 
 logger = logging.getLogger('django')
@@ -222,12 +224,15 @@ class CommonResponseHandler(BaseResponseHandler):
         # Route non-state-machine function calls to the appropriate handler.
         _freeflow_action_tools = {'download_file'}
         _json_message_tools = {'process_user_input', 'respond_to_user'}
+        _profile_tools = {'submit_user_context'}
         if isinstance(response, dict) and 'function_call' in response:
             fc_name = response.get('function_call', {}).get('name', '')
             if fc_name in _freeflow_action_tools:
                 return self._handle_freeflow_function_call(response, chat_session, chunks, **kwargs)
             elif fc_name in _json_message_tools:
                 return self._handle_json_tool_response(response, chat_session, chunks, **kwargs)
+            elif fc_name in _profile_tools:
+                return self._handle_profile_tool_response(response, chat_session, chunks, **kwargs)
 
         retry_attempt = kwargs.get('retry_attempt', 0)
         print(f"DEBUG: Current retry attempt: {retry_attempt}")
@@ -714,6 +719,11 @@ class CommonResponseHandler(BaseResponseHandler):
             other_params['reason'] = reason
             print(f"DEBUG: Adding reason to other_params: {reason}")
 
+        if extra_content:
+            public_extra = {k: v for k, v in extra_content.items() if not k.startswith('_')}
+            if public_extra:
+                other_params['extra_content'] = public_extra
+
         stage = state_machine.name if state_machine else None
         if response and str(response).strip():
             message_to_save = response
@@ -795,6 +805,137 @@ class CommonResponseHandler(BaseResponseHandler):
             **kwargs
         )
 
+    def _handle_profile_tool_response(self, response, chat_session, chunks, **kwargs):
+        """Handle submit_user_context — persist extracted context to Profile/ProfileAddress and inject into extra_content."""
+        arguments = response['function_call'].get('arguments', {})
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                arguments = repair_json(arguments, return_objects=True)
+
+        profile_id = kwargs.get('profile_id')
+        if profile_id:
+            self._save_submitted_user_context(profile_id, arguments)
+
+        llm_extra_content = kwargs.get('llm_extra_content') or {}
+        llm_extra_content['profile'] = arguments
+        llm_extra_content['profile_extracted'] = True
+        kwargs['llm_extra_content'] = llm_extra_content
+
+        return self._handle_regular_response(
+            response='',
+            chat_session=chat_session,
+            chunks=chunks,
+            current_step=chat_session.current_step,
+            **kwargs
+        )
+
+    def _save_submitted_user_context(self, profile_id, arguments):
+        """Persist submit_user_context arguments to Profile and ProfileAddress."""
+        from chatbot.models.profile_models import Profile
+        from chatbot.models.geo_models import ProfileAddress
+        try:
+            profile = Profile.objects.filter(id=profile_id).first()
+            if not profile:
+                logger.info(f'[submit_user_context] profile not found for id={profile_id}')
+                return
+
+            update_fields = []
+            if arguments.get('name'):
+                profile.first_name = arguments['name']
+                update_fields.append('first_name')
+            if arguments.get('role'):
+                profile.designation = arguments['role']
+                update_fields.append('designation')
+            if arguments.get('school_name'):
+                profile.org_associated = arguments['school_name']
+                update_fields.append('org_associated')
+            other_params = profile.other_params or {}
+            other_params['is_onboarding_completed'] = True
+            profile.other_params = other_params
+            update_fields.append('other_params')
+            profile.save(update_fields=update_fields)
+            logger.info(f'[submit_user_context] updated Profile id={profile_id} fields={update_fields}')
+
+            district = arguments.get('district')
+            state = arguments.get('state')
+            if district or state:
+                address, created = ProfileAddress.objects.get_or_create(profile=profile)
+                addr_fields = []
+                if district:
+                    address.district = district
+                    addr_fields.append('district')
+                if state:
+                    address.state = state
+                    addr_fields.append('state')
+                address.save(update_fields=addr_fields)
+                logger.info(f'[submit_user_context] {"created" if created else "updated"} ProfileAddress for profile id={profile_id} fields={addr_fields}')
+
+        except Exception as e:
+            logger.error(f'[submit_user_context] failed to save profile context: {e}', exc_info=True)
+
+    def _translate_download_arguments(self, arguments: dict, language: str, company_bot) -> dict:
+        if language == 'en':
+            return arguments
+
+        voice_provider = Voice.objects.filter(
+            company_bot=company_bot, type=VoiceType.TextToText, language=language
+        ).first()
+        if not voice_provider:
+            logger.info('[_translate_download_arguments] no TextToText voice provider for language=%s — skipping translation', language)
+            return arguments
+
+        def _translate(text, context=''):
+            try:
+                resp = text_translate_provider(
+                    voice_provider=voice_provider, message_body=text,
+                    target_language=language, source_language='en'
+                )
+                if resp.get('status') == 200:
+                    return resp.get('content') or text
+                logger.error(
+                    '[_translate_download_arguments] translation failed%s status=%s — falling back to original',
+                    f' ({context})' if context else '', resp.get('status')
+                )
+            except Exception as e:
+                logger.error(
+                    '[_translate_download_arguments] translation exception%s: %s — falling back to original',
+                    f' ({context})' if context else '', e, exc_info=True
+                )
+            return text
+
+        SKIP_KEYS = {'filename'}
+        translated = {}
+
+        for key, value in arguments.items():
+            if key in SKIP_KEYS:
+                translated[key] = value
+            elif isinstance(value, str):
+                translated[key] = _translate(value, context=key)
+            elif isinstance(value, list):
+                translated_list = []
+                for i, item in enumerate(value):
+                    if isinstance(item, str):
+                        translated_list.append(_translate(item, context=f'{key}[{i}]'))
+                    elif isinstance(item, dict):
+                        translated_item = {}
+                        for k, v in item.items():
+                            if isinstance(v, str):
+                                translated_item[k] = _translate(v, context=f'{key}[{i}].{k}')
+                            else:
+                                translated_item[k] = v
+                        translated_list.append(translated_item)
+                    else:
+                        translated_list.append(item)
+                translated[key] = translated_list
+            elif isinstance(value, (int, float)):
+                translated[key] = value
+            else:
+                translated[key] = value
+
+        return translated
+
     def _handle_freeflow_function_call(self, response, chat_session, chunks, **kwargs):
         """Handle function calls for FREE_FLOW bots (like download_file)"""
         
@@ -841,18 +982,44 @@ class CommonResponseHandler(BaseResponseHandler):
 
             logger.info(f'[download_file] flow_name={flow_name!r} filename={filename!r} sources={len(finalized_sources)}')
 
+            # Translate LLM-generated content fields to the user's language
+            arguments = self._translate_download_arguments(arguments, language, company_bot)
+
+            filename_base = os.path.splitext(filename)[0]
+            translated_filename = filename_base
+            if language != 'en':
+                try:
+                    filename_voice_provider = Voice.objects.filter(
+                        company_bot=company_bot, type=VoiceType.TextToText, language=language
+                    ).first()
+                    if filename_voice_provider:
+                        filename_translation_response = text_translate_provider(
+                            voice_provider=filename_voice_provider, message_body=filename_base,
+                            target_language=language, source_language='en'
+                        )
+                        if filename_translation_response.get('status') == 200:
+                            translated_filename = filename_translation_response.get('content') or filename_base
+                        else:
+                            logger.error('[download_file] filename translation failed status=%s — using original', filename_translation_response.get('status'))
+                except Exception as e:
+                    logger.error('[download_file] filename translation exception: %s — using original', e)
+
             pdf_result = render_template_to_pdf(
                 flow_name=flow_name,
                 arguments=arguments,
                 company_bot_id=company_bot.id,
                 session_id=session_id,
                 sources=finalized_sources,
+                language=language,
+                display_filename=translated_filename,
             )
             docx_result = create_docx_from_args(
                 arguments=arguments,
                 company_bot_id=company_bot.id,
                 session_id=session_id,
                 sources=finalized_sources,
+                flow_name=flow_name,
+                language=language,
             )
 
             pdf_url = pdf_result.get('media_url') if pdf_result.get('success') else None
@@ -868,10 +1035,12 @@ class CommonResponseHandler(BaseResponseHandler):
                 pdf_result = render_template_to_pdf(
                     flow_name=flow_name, arguments=arguments,
                     company_bot_id=company_bot.id, session_id=session_id, sources=finalized_sources,
+                    language=language, display_filename=translated_filename,
                 )
                 docx_result = create_docx_from_args(
                     arguments=arguments,
                     company_bot_id=company_bot.id, session_id=session_id, sources=finalized_sources,
+                    flow_name=flow_name, language=language,
                 )
                 pdf_url = pdf_result.get('media_url') if pdf_result.get('success') else None
                 docx_url = docx_result.get('media_url') if docx_result.get('success') else None
@@ -879,11 +1048,16 @@ class CommonResponseHandler(BaseResponseHandler):
 
             logger.info(f'[download_file] pdf_url={pdf_url} docx_url={docx_url}')
 
+            _raw_filename = pdf_result.get('file_name') or docx_result.get('file_name')
+            display_filename = translated_filename if _raw_filename else None
+
             download = {}
             if pdf_url:
                 download['pdf_url'] = pdf_url
             if docx_url:
                 download['docx_url'] = docx_url
+            if display_filename:
+                download['file_name'] = display_filename
 
             if not download:
                 bot_message = self.default_error_message
@@ -918,12 +1092,7 @@ class CommonResponseHandler(BaseResponseHandler):
                 status=ChatStatus.IN_PROGRESS,
                 translated_message=translated_message,
                 stage=None,
-                other_params={
-                    'function_call': function_name,
-                    'arguments': arguments,
-                    'pdf_url': pdf_url,
-                    'docx_url': docx_url,
-                },
+                other_params={'extra_content': extra_content_to_send} if extra_content_to_send else None,
             )
 
             return bot_message

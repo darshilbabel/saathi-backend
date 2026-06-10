@@ -46,16 +46,11 @@ class AsyncBaseConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def save_chat_session(self, session_id):
-        chat_session = ChatSession.objects.filter(session=session_id)
-        if chat_session.exists():
-            c = chat_session[0]
-        else:
-            c = ChatSession(session=session_id)
-
-        if hasattr(self, 'route'):
-            c.save_title(self.route)
-        else:
-            c.save_title()
+        from chatbot.celery_tasks.title_tasks import generate_session_title
+        session = ChatSession.objects.filter(session=session_id).first()
+        if session and not session.title:
+            language = getattr(self, 'route', 'en') or 'en'
+            generate_session_title.delay(session_id, language)
 
     @database_sync_to_async
     def determine_company_chat_status(self, session_id, profile_id, route, is_disconnected=False):

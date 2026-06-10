@@ -185,3 +185,128 @@ def logout(request):
         }, status=500)
 
 
+@api_view(['GET'])
+def get_profile_view(request):
+    try:
+        profile_id = request.query_params.get('profile_id')
+        email = request.query_params.get('email')
+        company_slug = request.query_params.get('company_slug')
+
+        if not profile_id and not email:
+            return Response({
+                'status': 'error',
+                'message': 'profile_id or email is required'
+            }, status=400)
+
+        if profile_id:
+            profile = Profile.objects.get(pk=profile_id)
+        else:
+            if company_slug:
+                company = Company.objects.get(slug=company_slug)
+            else:
+                company = Company.objects.order_by('id').first()
+                if not company:
+                    return Response({
+                        'status': 'error',
+                        'message': 'No company found'
+                    }, status=404)
+            profile = Profile.objects.get(email=email, company=company)
+
+        is_tnc_accepted = bool(
+            profile.other_params and profile.other_params.get('is_tnc_accepted', False)
+        )
+
+        is_onboarding_completed = bool(
+            profile.other_params and profile.other_params.get('is_onboarding_completed', False)
+        )
+        is_profile_complete = is_onboarding_completed
+
+        return Response({
+            'id': profile.id,
+            'first_name': profile.first_name,
+            'last_name': profile.last_name,
+            'email': profile.email,
+            'phone': profile.phone,
+            'designation': profile.designation,
+            'org_associated': profile.org_associated,
+            'gender': profile.gender,
+            'location': profile.location,
+            'preferred_route': profile.preferred_route,
+            'is_tnc_accepted': is_tnc_accepted,
+            'is_profile_complete': is_profile_complete,
+        }, status=200)
+
+    except Profile.DoesNotExist:
+        return Response({
+            'status': 'error',
+            'message': 'Profile not found'
+        }, status=404)
+
+    except Company.DoesNotExist:
+        return Response({
+            'status': 'error',
+            'message': 'Company not found'
+        }, status=404)
+
+    except Exception as e:
+        traceback.print_exc()
+        return Response({
+            'status': 'error',
+            'message': str(e)
+        }, status=500)
+
+
+@api_view(['PATCH'])
+def accept_tnc_view(request):
+    try:
+        profile_id = request.data.get('profile_id')
+        email = request.data.get('email')
+        company_slug = request.data.get('company_slug')
+
+        if not profile_id and not email:
+            return Response({
+                'status': 'error',
+                'message': 'profile_id or email is required'
+            }, status=400)
+
+        if profile_id:
+            profile = Profile.objects.get(pk=profile_id)
+        else:
+            if company_slug:
+                company = Company.objects.get(slug=company_slug)
+            else:
+                company = Company.objects.order_by('id').first()
+                if not company:
+                    return Response({
+                        'status': 'error',
+                        'message': 'No company found'
+                    }, status=404)
+            profile = Profile.objects.get(email=email, company=company)
+        other_params = profile.other_params or {}
+        other_params['is_tnc_accepted'] = True
+        profile.other_params = other_params
+        profile.save(update_fields=['other_params', 'updated_at'])
+
+        return Response({
+            'status': 'ok',
+            'is_tnc_accepted': True,
+        }, status=200)
+
+    except Profile.DoesNotExist:
+        return Response({
+            'status': 'error',
+            'message': 'Profile not found'
+        }, status=404)
+
+    except Company.DoesNotExist:
+        return Response({
+            'status': 'error',
+            'message': 'Company not found'
+        }, status=404)
+
+    except Exception as e:
+        traceback.print_exc()
+        return Response({
+            'status': 'error',
+            'message': str(e)
+        }, status=500)
