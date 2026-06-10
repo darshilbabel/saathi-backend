@@ -719,6 +719,11 @@ class CommonResponseHandler(BaseResponseHandler):
             other_params['reason'] = reason
             print(f"DEBUG: Adding reason to other_params: {reason}")
 
+        if extra_content:
+            public_extra = {k: v for k, v in extra_content.items() if not k.startswith('_')}
+            if public_extra:
+                other_params['extra_content'] = public_extra
+
         stage = state_machine.name if state_machine else None
         if response and str(response).strip():
             message_to_save = response
@@ -1087,12 +1092,7 @@ class CommonResponseHandler(BaseResponseHandler):
                 status=ChatStatus.IN_PROGRESS,
                 translated_message=translated_message,
                 stage=None,
-                other_params={
-                    'function_call': function_name,
-                    'arguments': arguments,
-                    'pdf_url': pdf_url,
-                    'docx_url': docx_url,
-                },
+                other_params={'extra_content': extra_content_to_send} if extra_content_to_send else None,
             )
 
             return bot_message
