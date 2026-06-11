@@ -1,3 +1,5 @@
+import re
+
 from chatbot.models import VoiceProvider, LanguageMapping, Voice, VoiceType, CompanyBot
 from chatbot.translate.ai4Bharat.speech_to_text import transcribe_ai4bharat_multiple_chunks
 from chatbot.translate.ai4Bharat.text_to_speech import ai4bharat_text_speech
@@ -16,6 +18,55 @@ import logging
 
 
 logger = logging.getLogger('django')
+
+
+def strip_markdown_for_tts(text: str) -> str:
+    """Strip markdown formatting so TTS engines receive clean natural-language text."""
+    if not text:
+        return text
+
+    # Fenced code blocks — remove entirely (before anything else to avoid inner matches)
+    text = re.sub(r'```[\s\S]*?```', '', text)
+    # Inline code — remove
+    text = re.sub(r'`[^`\n]+`', '', text)
+    # Images first — must precede links or [alt](url) gets consumed leaving a stray !
+    text = re.sub(r'!\[([^\]]*)\]\([^)]*\)', r'\1', text)
+    # Links — keep display text, drop URL
+    text = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', text)
+    # Horizontal rules: standalone line of 3+ hyphens / underscores / asterisks
+    text = re.sub(r'^\s*[-_*]{3,}\s*$', '', text, flags=re.MULTILINE)
+    # Multiple consecutive hyphens used as em/en dash
+    text = re.sub(r'-{2,}', ' ', text)
+    # Table separator rows (|---|:---|)
+    text = re.sub(r'^\|[\s\-|:]+\|$', '', text, flags=re.MULTILINE)
+    # Table cell pipes → space
+    text = re.sub(r'\|', ' ', text)
+    # Heading markers (# / ## / ### etc.)
+    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+    # Blockquote markers
+    text = re.sub(r'^>\s*', '', text, flags=re.MULTILINE)
+    # HTML line breaks → period so TTS pauses between items (LLM uses <br> inside table cells)
+    text = re.sub(r'\s*<br\s*/?>\s*', '. ', text, flags=re.IGNORECASE)
+    # Any remaining HTML tags → remove
+    text = re.sub(r'<[^>]+>', '', text)
+    # Unicode bullet character • → remove (period from <br> already provides the pause)
+    text = re.sub(r'•\s*', '', text)
+    # Clean up double periods that arise when text before <br> already ended with punctuation
+    text = re.sub(r'([.!?])\s*\.\s*', r'\1 ', text)
+    # Bullet list markers BEFORE bold/italic — prevents * bullet + **bold** from being misread as nested *{1,3}
+    text = re.sub(r'^[ \t]*[-*]\s+', '', text, flags=re.MULTILINE)
+    # Bold + italic with asterisks: ***text*** / **text** / *text*  (single-line, non-nested)
+    text = re.sub(r'\*{1,3}([^\n*]*?)\*{1,3}', r'\1', text)
+    # Bold + italic with underscores: __text__ / _text_  (single-line, non-nested)
+    text = re.sub(r'_{1,2}([^\n_]*?)_{1,2}', r'\1', text)
+    # Remaining lone asterisks / underscores not attached to word characters
+    text = re.sub(r'(?<!\w)[*_]+(?!\w)', '', text)
+    # Collapse 3+ consecutive newlines → 2
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    # Collapse multiple spaces/tabs → single space
+    text = re.sub(r'[ \t]{2,}', ' ', text)
+
+    return text.strip()
 
 
 def get_voice_provider(company_bot, voice_type, source_language=None, target_language=None):
@@ -44,6 +95,8 @@ def get_voice_provider(company_bot, voice_type, source_language=None, target_lan
 
 
 def text_speech_provider(company_bot, text, source_language):
+    text = strip_markdown_for_tts(text)
+    print("Strip text: ", text)
     voice_provider = get_voice_provider(
         company_bot=company_bot, voice_type=VoiceType.TextToSpeech, source_language=source_language
     )
