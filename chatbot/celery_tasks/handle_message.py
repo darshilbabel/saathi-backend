@@ -38,24 +38,30 @@ def _translate_chips(extra_content, voice_provider, route):
 
 def translate_and_send_message(
         accumulated_message, current_channel_name, current_step_number, finish_reason, route, company_bot,
-        extra_content=None
+        extra_content=None, is_bot_vernacular_message=False
 ):
 
     if route != 'en' and accumulated_message and accumulated_message!= '':
         # target_language_code = get_language_code_from_route(route)
         logger.info(f"target_language_code date: %s", route)
-        voice_provider = Voice.objects.filter(
-            company_bot=company_bot, type=VoiceType.TextToText, language=route
-        ).first()
 
-        response = text_translate_provider(
-            voice_provider=voice_provider, message_body=accumulated_message, target_language=route,
-            source_language='en'
-        )
-        if response.get('status') == 200:
-            translated_messages =  response.get('content')
-        else:
+        if is_bot_vernacular_message:
+            # Message is already in the target language — skip translation entirely.
             translated_messages = accumulated_message
+            voice_provider = None
+        else:
+            voice_provider = Voice.objects.filter(
+                company_bot=company_bot, type=VoiceType.TextToText, language=route
+            ).first()
+
+            response = text_translate_provider(
+                voice_provider=voice_provider, message_body=accumulated_message, target_language=route,
+                source_language='en'
+            )
+            if response.get('status') == 200:
+                translated_messages = response.get('content')
+            else:
+                translated_messages = accumulated_message
 
         extra_content = _translate_chips(extra_content, voice_provider, route)
 

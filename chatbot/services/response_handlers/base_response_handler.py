@@ -30,14 +30,14 @@ class BaseResponseHandler(ABC):
         self._metadata_tools = {'respond_to_user'}
 
     def get_error_message(self, company_bot, language):
-        """Return the vernacular error message if configured, otherwise the default."""
+        """Return (message, is_vernacular) — is_vernacular=True means message is already in target language."""
         try:
             vernacular = BotVernacular.objects.filter(company_bot=company_bot, language=language).first()
             if vernacular and vernacular.error_message:
-                return vernacular.error_message
+                return vernacular.error_message, True
         except Exception:
             pass
-        return self.default_error_message
+        return self.default_error_message, False
 
     def _is_response_too_short(self, response):
         """
@@ -194,7 +194,7 @@ class BaseResponseHandler(ABC):
                         }
                     }
                 else:
-                    response = self.get_error_message(company_bot, kwargs.get('language'))
+                    response, _ = self.get_error_message(company_bot, kwargs.get('language'))
 
         if is_function_call and response is None:
             response = early_return
@@ -435,7 +435,8 @@ class BaseResponseHandler(ABC):
                         continue
                     if not response_data:
                         logger.info('[tool_loop] respond_to_user still empty after retry — sending default error')
-                        return self.get_error_message(company_bot, language), None, None
+                        err_msg, _ = self.get_error_message(company_bot, language)
+                        return err_msg, None, None
                     return self._with_turn_usage(response_data, extra, finish, turn_usage)
                 # Web search held back for KB fallback. Only retry if LLM gave NO response at all —
                 # a non-empty answer is a deliberate choice (and streaming already sent those tokens).
@@ -501,7 +502,8 @@ class BaseResponseHandler(ABC):
             append_to_last = True
 
         logger.error('[tool_loop] max tool iterations reached')
-        return self.get_error_message(company_bot, language), None, 'stop'
+        err_msg, _ = self.get_error_message(company_bot, language)
+        return err_msg, None, 'stop'
 
     def _execute_tool(self, tool_name, arguments, company_bot):
         """Execute a tool call and return (result_text_for_llm, retrieved_chunks)."""
@@ -1039,7 +1041,8 @@ class BaseResponseHandler(ABC):
             other_params=other_params
         )
 
-    def translate_message(self, message, channel_name, step_number, language, company_bot, extra_content=None):
+    def translate_message(self, message, channel_name, step_number, language, company_bot, extra_content=None,
+                          is_bot_vernacular_message=False):
         """Translate and send message"""
         return translate_and_send_message(
             accumulated_message=message,
@@ -1048,7 +1051,8 @@ class BaseResponseHandler(ABC):
             finish_reason="stop",
             route=language,
             company_bot=company_bot,
-            extra_content=extra_content
+            extra_content=extra_content,
+            is_bot_vernacular_message=is_bot_vernacular_message,
         )
 
     def get_chat_status(self, state_machine, company_bot):

@@ -52,8 +52,9 @@ class CommonResponseHandler(BaseResponseHandler):
             other_info=other_info
         )
         print("DATE RES: ", bot_question)
+        is_vernacular_error = False
         if bot_question is None:
-            bot_question = self.get_error_message(company_bot, language)
+            bot_question, is_vernacular_error = self.get_error_message(company_bot, language)
 
         if bot_question == '':
             return {
@@ -67,7 +68,7 @@ class CommonResponseHandler(BaseResponseHandler):
         else:
             translated_message = self.translate_message(
                 message=bot_question, channel_name=channel_name, step_number=chat_session.current_step,
-                language=language, company_bot=company_bot
+                language=language, company_bot=company_bot, is_bot_vernacular_message=is_vernacular_error
             )
 
             stage = state_machine.name if state_machine else None
@@ -104,7 +105,8 @@ class CommonResponseHandler(BaseResponseHandler):
             )
         except CompanyStateMachine.DoesNotExist:
             logger.error(f"State machine not found for step {chat_session.current_step}")
-            return self.get_error_message(company_bot, language)
+            err_msg, _ = self.get_error_message(company_bot, language)
+            return err_msg
         
         chat_status = self.get_chat_status(
             state_machine=state_machine, company_bot=company_bot
@@ -322,11 +324,12 @@ class CommonResponseHandler(BaseResponseHandler):
         forward_kwargs['skip_next_stage_preprocessing'] = kwargs.get('skip_next_stage_preprocessing', False)
 
         if kwargs.get('use_error_message', False) and not is_function_call:
-            error_message = self.get_error_message(company_bot, language)
+            error_message, is_vernacular = self.get_error_message(company_bot, language)
             logger.info(f"Using error message: {error_message}")
             print(f"DEBUG: Using error message: {error_message}")
             expected_output_response = error_message
             response = error_message
+            kwargs['is_bot_vernacular_message'] = is_vernacular
 
         # Handle function calls for STATE_MACHINE bots
         if is_function_call and company_bot and company_bot.bot_type == CompanyBotTypeChoices.STATE_MACHINE:
@@ -709,7 +712,8 @@ class CommonResponseHandler(BaseResponseHandler):
 
         translated_message = self.translate_message(
             message=response, channel_name=channel_name, step_number=current_step,
-            language=language, company_bot=company_bot, extra_content=extra_content
+            language=language, company_bot=company_bot, extra_content=extra_content,
+            is_bot_vernacular_message=kwargs.get('is_bot_vernacular_message', False),
         )
 
         other_params = {}
@@ -1058,7 +1062,7 @@ class CommonResponseHandler(BaseResponseHandler):
                 download['file_name'] = display_filename
 
             if not download:
-                bot_message = self.get_error_message(company_bot, language)
+                bot_message, _ = self.get_error_message(company_bot, language)
                 extra_content_to_send = {}
             else:
                 bot_message = arguments.get('bot_message', f"Your file '{filename}' is ready to download.")
@@ -1096,4 +1100,5 @@ class CommonResponseHandler(BaseResponseHandler):
             return bot_message
         else:
             logger.warning(f"Unknown function call: {function_name}")
-            return self.get_error_message(company_bot, language)
+            err_msg, _ = self.get_error_message(company_bot, language)
+            return err_msg
