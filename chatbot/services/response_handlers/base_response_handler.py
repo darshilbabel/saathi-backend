@@ -5,6 +5,7 @@ from chatbot.celery_tasks.common_chat_tasks import save_in_company_db
 from chatbot.celery_tasks.handle_message import translate_and_send_message
 from chatbot.llm_models.llm_gateway import build_gateway_params, call_llm_gateway, call_llm_gateway_stream
 from chatbot.models import ChatSession, ChatStatus, CompanyBotTypeChoices
+from chatbot.models.bot_vernacular_model import BotVernacular
 from chatbot.models.company_models import CompanyStateMachine
 from chatbot.models.enums import OperationTypeChoices, PreProcessOutputMode
 from chatbot.services.postprocessing.postprocessing_service import PostprocessingService
@@ -27,6 +28,16 @@ class BaseResponseHandler(ABC):
         self._executable_tools = {'search_knowledge_base'}
         self._gateway_handled_tools = {'web_search'}
         self._metadata_tools = {'respond_to_user'}
+
+    def get_error_message(self, company_bot, language):
+        """Return the vernacular error message if configured, otherwise the default."""
+        try:
+            vernacular = BotVernacular.objects.filter(company_bot=company_bot, language=language).first()
+            if vernacular and vernacular.error_message:
+                return vernacular.error_message
+        except Exception:
+            pass
+        return self.default_error_message
 
     def _is_response_too_short(self, response):
         """
@@ -183,7 +194,7 @@ class BaseResponseHandler(ABC):
                         }
                     }
                 else:
-                    response = self.default_error_message
+                    response = self.get_error_message(company_bot, kwargs.get('language'))
 
         if is_function_call and response is None:
             response = early_return
@@ -323,6 +334,7 @@ class BaseResponseHandler(ABC):
         result = self._handle_gateway_response(
             system_prompt=system_prompt, messages=message_to_send, company_bot=company_bot,
             session_id=session_id, profile_id=profile_id, tools=tools, channel_name=channel_name,
+            language=kwargs.get('language'),
         )
 
         if result is None or (isinstance(result, tuple) and result[0] is None):
@@ -335,6 +347,7 @@ class BaseResponseHandler(ABC):
 
     def _handle_gateway_response(
         self, system_prompt, messages, company_bot, session_id, profile_id, tools=None, channel_name=None,
+        language=None,
     ):
         import json as _json
 
@@ -422,7 +435,7 @@ class BaseResponseHandler(ABC):
                         continue
                     if not response_data:
                         logger.info('[tool_loop] respond_to_user still empty after retry — sending default error')
-                        return self.default_error_message, None, None
+                        return self.get_error_message(company_bot, language), None, None
                     return self._with_turn_usage(response_data, extra, finish, turn_usage)
                 # Web search held back for KB fallback. Only retry if LLM gave NO response at all —
                 # a non-empty answer is a deliberate choice (and streaming already sent those tokens).
@@ -488,7 +501,7 @@ class BaseResponseHandler(ABC):
             append_to_last = True
 
         logger.error('[tool_loop] max tool iterations reached')
-        return self.default_error_message, None, 'stop'
+        return self.get_error_message(company_bot, language), None, 'stop'
 
     def _execute_tool(self, tool_name, arguments, company_bot):
         """Execute a tool call and return (result_text_for_llm, retrieved_chunks)."""

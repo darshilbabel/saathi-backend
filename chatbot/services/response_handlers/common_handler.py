@@ -1,4 +1,4 @@
-from chatbot.models import ChatStatus, CompanyChat, CompanyBotTypeChoices, LLMProvider, BotVernacular, Voice, VoiceType
+from chatbot.models import ChatStatus, CompanyChat, CompanyBotTypeChoices, LLMProvider, Voice, VoiceType
 from chatbot.models.company_models import CompanyStateMachine
 from chatbot.services.response_handlers.base_response_handler import BaseResponseHandler
 from chatbot.utils.shiksha_chaupal.date_utils import handle_date_prompt
@@ -53,7 +53,7 @@ class CommonResponseHandler(BaseResponseHandler):
         )
         print("DATE RES: ", bot_question)
         if bot_question is None:
-            bot_question = self.default_error_message
+            bot_question = self.get_error_message(company_bot, language)
 
         if bot_question == '':
             return {
@@ -104,7 +104,7 @@ class CommonResponseHandler(BaseResponseHandler):
             )
         except CompanyStateMachine.DoesNotExist:
             logger.error(f"State machine not found for step {chat_session.current_step}")
-            return self.default_error_message
+            return self.get_error_message(company_bot, language)
         
         chat_status = self.get_chat_status(
             state_machine=state_machine, company_bot=company_bot
@@ -322,9 +322,7 @@ class CommonResponseHandler(BaseResponseHandler):
         forward_kwargs['skip_next_stage_preprocessing'] = kwargs.get('skip_next_stage_preprocessing', False)
 
         if kwargs.get('use_error_message', False) and not is_function_call:
-            bot_vernacular = BotVernacular.objects.filter(company_bot=company_bot, language=language).first()
-            error_message = bot_vernacular.error_message if (
-                    bot_vernacular and bot_vernacular.error_message) else "Please try again!"
+            error_message = self.get_error_message(company_bot, language)
             logger.info(f"Using error message: {error_message}")
             print(f"DEBUG: Using error message: {error_message}")
             expected_output_response = error_message
@@ -1060,7 +1058,7 @@ class CommonResponseHandler(BaseResponseHandler):
                 download['file_name'] = display_filename
 
             if not download:
-                bot_message = self.default_error_message
+                bot_message = self.get_error_message(company_bot, language)
                 extra_content_to_send = {}
             else:
                 bot_message = arguments.get('bot_message', f"Your file '{filename}' is ready to download.")
@@ -1098,4 +1096,4 @@ class CommonResponseHandler(BaseResponseHandler):
             return bot_message
         else:
             logger.warning(f"Unknown function call: {function_name}")
-            return self.default_error_message
+            return self.get_error_message(company_bot, language)
