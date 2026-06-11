@@ -172,6 +172,9 @@ class BaseResponseHandler(ABC):
                 if isinstance(extra_content, dict) and '_usage_cost' in extra_content:
                     kwargs['_usage_cost'] = extra_content.pop('_usage_cost')
 
+                if isinstance(extra_content, dict) and extra_content.pop('_is_vernacular_error', False):
+                    kwargs['is_bot_vernacular_message'] = True
+
                 # Store extra_content if present for later use
                 if extra_content:
                     kwargs['llm_extra_content'] = extra_content
@@ -194,7 +197,9 @@ class BaseResponseHandler(ABC):
                         }
                     }
                 else:
-                    response, _ = self.get_error_message(company_bot, kwargs.get('language'))
+                    response, is_vernacular = self.get_error_message(company_bot, kwargs.get('language'))
+                    if is_vernacular:
+                        kwargs['is_bot_vernacular_message'] = True
 
         if is_function_call and response is None:
             response = early_return
@@ -435,8 +440,8 @@ class BaseResponseHandler(ABC):
                         continue
                     if not response_data:
                         logger.info('[tool_loop] respond_to_user still empty after retry — sending default error')
-                        err_msg, _ = self.get_error_message(company_bot, language)
-                        return err_msg, None, None
+                        err_msg, is_vernacular = self.get_error_message(company_bot, language)
+                        return err_msg, {'_is_vernacular_error': is_vernacular} if is_vernacular else None, None
                     return self._with_turn_usage(response_data, extra, finish, turn_usage)
                 # Web search held back for KB fallback. Only retry if LLM gave NO response at all —
                 # a non-empty answer is a deliberate choice (and streaming already sent those tokens).
@@ -502,8 +507,8 @@ class BaseResponseHandler(ABC):
             append_to_last = True
 
         logger.error('[tool_loop] max tool iterations reached')
-        err_msg, _ = self.get_error_message(company_bot, language)
-        return err_msg, None, 'stop'
+        err_msg, is_vernacular = self.get_error_message(company_bot, language)
+        return err_msg, {'_is_vernacular_error': is_vernacular} if is_vernacular else None, 'stop'
 
     def _execute_tool(self, tool_name, arguments, company_bot):
         """Execute a tool call and return (result_text_for_llm, retrieved_chunks)."""
