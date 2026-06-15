@@ -1,9 +1,11 @@
 import os
+import logging
 import requests
 from chatbot.models import Profile, Company, SessionFlowName
 from chatbot.models.geo_models import ProfileAddress
 import json_repair
 
+logger = logging.getLogger('django')
 elevate_base_url = os.getenv('ELEVATE_BASE_URL')
 
 def handle_elevate_profile(access_token):
@@ -29,19 +31,17 @@ def handle_elevate_profile(access_token):
         phone = user_data.get('phone')
         email = user_data.get('email')
         language = user_data.get('preferred_language')
-        raw_designation = user_data.get('professional_role')
+        raw_designation = user_data.get('userRole')
         designation_value = None
         if isinstance(raw_designation, dict):
             designation_value = raw_designation.get('label') or raw_designation
         elif isinstance(raw_designation, str):
-            try:
-                designation_value = json_repair.repair_json(raw_designation, return_objects=True)
-                if isinstance(designation_value, dict):
-                    designation_value = designation_value.get('label')
-            except Exception:
-                designation_value = raw_designation
+            designation_value = raw_designation
         else:
             designation_value = None
+
+        raw_school = user_data.get('userSchool')
+        school_name = raw_school.get('label') if isinstance(raw_school, dict) else raw_school
 
         if language:
             if isinstance(language, dict):
@@ -72,6 +72,7 @@ def handle_elevate_profile(access_token):
                 'latest_flow_used': SessionFlowName.LoginMiStory,
                 'location': user_data.get('location'),
                 'designation': designation_value,
+                'org_associated': school_name,
                 'source': 'elevate',
                 'preferred_route': language,
             }
@@ -81,8 +82,8 @@ def handle_elevate_profile(access_token):
         profile.other_params = existing_other_params
         profile.save(update_fields=['other_params'])
 
-        state = user_data.get('state', {})
-        district = user_data.get('district', {})
+        state = user_data.get('profileState', {})
+        district = user_data.get('userDistrict', {})
         block = user_data.get('block', {})
 
         if state.get('label') or district.get('label') or block.get('label'):
@@ -114,4 +115,32 @@ def handle_elevate_profile(access_token):
     except Exception as e:
         print(f"Unexpected error: {e}")
 
+    return {}
+
+
+def update_elevate_profile(access_token, name=None, role=None, school_name=None, district=None, state=None):
+    try:
+        url = f"{elevate_base_url}/user/v1/user/update"
+        headers = {'X-auth-token': access_token}
+        body = {'about': 'please get hardcode the about'}  # hardcoded for now
+        if name:
+            body['name'] = name
+        if role:
+            body['userRole'] = role
+        if school_name:
+            body['userSchool'] = school_name
+        if district:
+            body['userDistrict'] = district
+        if state:
+            body['profileState'] = state
+
+        logger.info(f'[update_elevate_profile] sending body={body}')
+        response = requests.patch(url, headers=headers, json=body, timeout=30)
+        logger.info(f'[update_elevate_profile] status={response.status_code} body={response.text}')
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        logger.error(f'[update_elevate_profile] request failed: {e}', exc_info=True)
+    except Exception as e:
+        logger.error(f'[update_elevate_profile] unexpected error: {e}', exc_info=True)
     return {}

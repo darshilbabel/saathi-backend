@@ -1,4 +1,4 @@
-from chatbot.models import ChatStatus, CompanyChat, CompanyBotTypeChoices, LLMProvider, BotVernacular, Voice, VoiceType
+from chatbot.models import ChatStatus, CompanyChat, CompanyBotTypeChoices, LLMProvider, Voice, VoiceType
 from chatbot.models.company_models import CompanyStateMachine
 from chatbot.services.response_handlers.base_response_handler import BaseResponseHandler
 from chatbot.utils.shiksha_chaupal.date_utils import handle_date_prompt
@@ -52,8 +52,9 @@ class CommonResponseHandler(BaseResponseHandler):
             other_info=other_info
         )
         print("DATE RES: ", bot_question)
+        is_vernacular_error = False
         if bot_question is None:
-            bot_question = self.default_error_message
+            bot_question, is_vernacular_error = self.get_error_message(company_bot, language)
 
         if bot_question == '':
             return {
@@ -67,7 +68,7 @@ class CommonResponseHandler(BaseResponseHandler):
         else:
             translated_message = self.translate_message(
                 message=bot_question, channel_name=channel_name, step_number=chat_session.current_step,
-                language=language, company_bot=company_bot
+                language=language, company_bot=company_bot, is_bot_vernacular_message=is_vernacular_error
             )
 
             stage = state_machine.name if state_machine else None
@@ -104,7 +105,8 @@ class CommonResponseHandler(BaseResponseHandler):
             )
         except CompanyStateMachine.DoesNotExist:
             logger.error(f"State machine not found for step {chat_session.current_step}")
-            return self.default_error_message
+            err_msg, _ = self.get_error_message(company_bot, language)
+            return err_msg
         
         chat_status = self.get_chat_status(
             state_machine=state_machine, company_bot=company_bot
@@ -322,13 +324,12 @@ class CommonResponseHandler(BaseResponseHandler):
         forward_kwargs['skip_next_stage_preprocessing'] = kwargs.get('skip_next_stage_preprocessing', False)
 
         if kwargs.get('use_error_message', False) and not is_function_call:
-            bot_vernacular = BotVernacular.objects.filter(company_bot=company_bot, language=language).first()
-            error_message = bot_vernacular.error_message if (
-                    bot_vernacular and bot_vernacular.error_message) else "Please try again!"
+            error_message, is_vernacular = self.get_error_message(company_bot, language)
             logger.info(f"Using error message: {error_message}")
             print(f"DEBUG: Using error message: {error_message}")
             expected_output_response = error_message
             response = error_message
+            kwargs['is_bot_vernacular_message'] = is_vernacular
 
         # Handle function calls for STATE_MACHINE bots
         if is_function_call and company_bot and company_bot.bot_type == CompanyBotTypeChoices.STATE_MACHINE:
@@ -711,7 +712,8 @@ class CommonResponseHandler(BaseResponseHandler):
 
         translated_message = self.translate_message(
             message=response, channel_name=channel_name, step_number=current_step,
-            language=language, company_bot=company_bot, extra_content=extra_content
+            language=language, company_bot=company_bot, extra_content=extra_content,
+            is_bot_vernacular_message=kwargs.get('is_bot_vernacular_message', False),
         )
 
         other_params = {}
@@ -816,7 +818,7 @@ class CommonResponseHandler(BaseResponseHandler):
 
         profile_id = kwargs.get('profile_id')
         if profile_id:
-            self._save_submitted_user_context(profile_id, arguments)
+            self._save_submitted_user_context(profile_id, arguments, access_token=kwargs.get('access_token'))
 
         llm_extra_content = kwargs.get('llm_extra_content') or {}
         llm_extra_content['profile'] = arguments
@@ -831,7 +833,7 @@ class CommonResponseHandler(BaseResponseHandler):
             **kwargs
         )
 
-    def _save_submitted_user_context(self, profile_id, arguments):
+    def _save_submitted_user_context(self, profile_id, arguments, access_token=None):
         """Persist submit_user_context arguments to Profile and ProfileAddress."""
         from chatbot.models.profile_models import Profile
         from chatbot.models.geo_models import ProfileAddress
@@ -871,6 +873,17 @@ class CommonResponseHandler(BaseResponseHandler):
                     addr_fields.append('state')
                 address.save(update_fields=addr_fields)
                 logger.info(f'[submit_user_context] {"created" if created else "updated"} ProfileAddress for profile id={profile_id} fields={addr_fields}')
+
+            if access_token:
+                from chatbot.utils.elevate.profile_utils import update_elevate_profile
+                update_elevate_profile(
+                    access_token=access_token,
+                    name=arguments.get('name'),
+                    role=arguments.get('role'),
+                    school_name=arguments.get('school_name'),
+                    district=district,
+                    state=state,
+                )
 
         except Exception as e:
             logger.error(f'[submit_user_context] failed to save profile context: {e}', exc_info=True)
@@ -1060,7 +1073,7 @@ class CommonResponseHandler(BaseResponseHandler):
                 download['file_name'] = display_filename
 
             if not download:
-                bot_message = self.default_error_message
+                bot_message, _ = self.get_error_message(company_bot, language)
                 extra_content_to_send = {}
             else:
                 bot_message = arguments.get('bot_message', f"Your file '{filename}' is ready to download.")
@@ -1098,4 +1111,5 @@ class CommonResponseHandler(BaseResponseHandler):
             return bot_message
         else:
             logger.warning(f"Unknown function call: {function_name}")
-            return self.default_error_message
+            err_msg, _ = self.get_error_message(company_bot, language)
+            return err_msg

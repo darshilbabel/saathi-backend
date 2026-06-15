@@ -17,7 +17,7 @@ class ChatOrchestrator:
         self.prompt_builder = PromptBuilder()
         self.message_handler = MessageHandler()
 
-    def process_chat_request(self, channel_name, session_id, profile_id, language):
+    def process_chat_request(self, channel_name, session_id, profile_id, language, access_token=None):
         """Main processing method"""
         try:
             # Get session data
@@ -90,6 +90,7 @@ class ChatOrchestrator:
                 'profile_id': profile_id,
                 'temp_messages': temp_messages,
                 'intro_mssg': intro_mssg,
+                'access_token': access_token,
             }
 
             # Add strategy-specific parameters

@@ -5,6 +5,7 @@ from chatbot.celery_tasks.common_chat_tasks import save_in_company_db
 from chatbot.celery_tasks.handle_message import translate_and_send_message
 from chatbot.llm_models.llm_gateway import build_gateway_params, call_llm_gateway, call_llm_gateway_stream
 from chatbot.models import ChatSession, ChatStatus, CompanyBotTypeChoices
+from chatbot.models.bot_vernacular_model import BotVernacular
 from chatbot.models.company_models import CompanyStateMachine
 from chatbot.models.enums import OperationTypeChoices, PreProcessOutputMode
 from chatbot.services.postprocessing.postprocessing_service import PostprocessingService
@@ -27,6 +28,16 @@ class BaseResponseHandler(ABC):
         self._executable_tools = {'search_knowledge_base'}
         self._gateway_handled_tools = {'web_search'}
         self._metadata_tools = {'respond_to_user'}
+
+    def get_error_message(self, company_bot, language):
+        """Return (message, is_vernacular) — is_vernacular=True means message is already in target language."""
+        try:
+            vernacular = BotVernacular.objects.filter(company_bot=company_bot, language=language).first()
+            if vernacular and vernacular.error_message:
+                return vernacular.error_message, True
+        except Exception as e:
+            logger.error("Failed to fetch BotVernacular for language=%s: %s", language, e)
+        return self.default_error_message, False
 
     def _is_response_too_short(self, response):
         """
@@ -161,6 +172,9 @@ class BaseResponseHandler(ABC):
                 if isinstance(extra_content, dict) and '_usage_cost' in extra_content:
                     kwargs['_usage_cost'] = extra_content.pop('_usage_cost')
 
+                if isinstance(extra_content, dict) and extra_content.pop('_is_vernacular_error', False):
+                    kwargs['is_bot_vernacular_message'] = True
+
                 # Store extra_content if present for later use
                 if extra_content:
                     kwargs['llm_extra_content'] = extra_content
@@ -183,7 +197,9 @@ class BaseResponseHandler(ABC):
                         }
                     }
                 else:
-                    response = self.default_error_message
+                    response, is_vernacular = self.get_error_message(company_bot, kwargs.get('language'))
+                    if is_vernacular:
+                        kwargs['is_bot_vernacular_message'] = True
 
         if is_function_call and response is None:
             response = early_return
@@ -323,6 +339,7 @@ class BaseResponseHandler(ABC):
         result = self._handle_gateway_response(
             system_prompt=system_prompt, messages=message_to_send, company_bot=company_bot,
             session_id=session_id, profile_id=profile_id, tools=tools, channel_name=channel_name,
+            language=kwargs.get('language'),
         )
 
         if result is None or (isinstance(result, tuple) and result[0] is None):
@@ -335,6 +352,7 @@ class BaseResponseHandler(ABC):
 
     def _handle_gateway_response(
         self, system_prompt, messages, company_bot, session_id, profile_id, tools=None, channel_name=None,
+        language=None,
     ):
         import json as _json
 
@@ -422,7 +440,8 @@ class BaseResponseHandler(ABC):
                         continue
                     if not response_data:
                         logger.info('[tool_loop] respond_to_user still empty after retry — sending default error')
-                        return self.default_error_message, None, None
+                        err_msg, is_vernacular = self.get_error_message(company_bot, language)
+                        return err_msg, {'_is_vernacular_error': is_vernacular} if is_vernacular else None, None
                     return self._with_turn_usage(response_data, extra, finish, turn_usage)
                 # Web search held back for KB fallback. Only retry if LLM gave NO response at all —
                 # a non-empty answer is a deliberate choice (and streaming already sent those tokens).
@@ -488,7 +507,8 @@ class BaseResponseHandler(ABC):
             append_to_last = True
 
         logger.error('[tool_loop] max tool iterations reached')
-        return self.default_error_message, None, 'stop'
+        err_msg, is_vernacular = self.get_error_message(company_bot, language)
+        return err_msg, {'_is_vernacular_error': is_vernacular} if is_vernacular else None, 'stop'
 
     def _execute_tool(self, tool_name, arguments, company_bot):
         """Execute a tool call and return (result_text_for_llm, retrieved_chunks)."""
@@ -1026,7 +1046,8 @@ class BaseResponseHandler(ABC):
             other_params=other_params
         )
 
-    def translate_message(self, message, channel_name, step_number, language, company_bot, extra_content=None):
+    def translate_message(self, message, channel_name, step_number, language, company_bot, extra_content=None,
+                          is_bot_vernacular_message=False):
         """Translate and send message"""
         return translate_and_send_message(
             accumulated_message=message,
@@ -1035,7 +1056,8 @@ class BaseResponseHandler(ABC):
             finish_reason="stop",
             route=language,
             company_bot=company_bot,
-            extra_content=extra_content
+            extra_content=extra_content,
+            is_bot_vernacular_message=is_bot_vernacular_message,
         )
 
     def get_chat_status(self, state_machine, company_bot):
