@@ -43,7 +43,7 @@ def translate_and_send_message(
 
     if route != 'en' and accumulated_message and accumulated_message!= '':
         # target_language_code = get_language_code_from_route(route)
-        logger.info(f"target_language_code date: %s", route)
+        logger.info("target_language_code: %s", route)
 
         if is_bot_vernacular_message:
             # Message is already in the target language — skip translation entirely.

@@ -35,8 +35,8 @@ class BaseResponseHandler(ABC):
             vernacular = BotVernacular.objects.filter(company_bot=company_bot, language=language).first()
             if vernacular and vernacular.error_message:
                 return vernacular.error_message, True
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error("Failed to fetch BotVernacular for language=%s: %s", language, e)
         return self.default_error_message, False
 
     def _is_response_too_short(self, response):

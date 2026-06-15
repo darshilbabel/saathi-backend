@@ -135,7 +135,7 @@ def update_elevate_profile(access_token, name=None, role=None, school_name=None,
             body['profileState'] = state
 
         logger.info(f'[update_elevate_profile] sending body={body}')
-        response = requests.patch(url, headers=headers, json=body)
+        response = requests.patch(url, headers=headers, json=body, timeout=30)
         logger.info(f'[update_elevate_profile] status={response.status_code} body={response.text}')
         response.raise_for_status()
         return response.json()

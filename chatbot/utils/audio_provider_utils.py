@@ -22,6 +22,8 @@ logger = logging.getLogger('django')
 
 def strip_markdown_for_tts(text: str) -> str:
     """Strip markdown formatting so TTS engines receive clean natural-language text."""
+    if text is None:
+        return ""
     if not text:
         return text
 
@@ -96,7 +98,7 @@ def get_voice_provider(company_bot, voice_type, source_language=None, target_lan
 
 def text_speech_provider(company_bot, text, source_language):
     text = strip_markdown_for_tts(text)
-    print("Strip text: ", text)
+    logger.info("TTS strip text: %s", text)
     voice_provider = get_voice_provider(
         company_bot=company_bot, voice_type=VoiceType.TextToSpeech, source_language=source_language
     )
