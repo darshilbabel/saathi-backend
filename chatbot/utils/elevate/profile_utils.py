@@ -1,9 +1,11 @@
 import os
+import logging
 import requests
 from chatbot.models import Profile, Company, SessionFlowName
 from chatbot.models.geo_models import ProfileAddress
 import json_repair
 
+logger = logging.getLogger('django')
 elevate_base_url = os.getenv('ELEVATE_BASE_URL')
 
 def handle_elevate_profile(access_token):
@@ -114,4 +116,31 @@ def handle_elevate_profile(access_token):
     except Exception as e:
         print(f"Unexpected error: {e}")
 
+    return {}
+
+
+def update_elevate_profile(access_token, name=None, role=None, school_name=None, district=None, state=None):
+    try:
+        url = f"{elevate_base_url}/user/v1/user/update"
+        headers = {'X-auth-token': access_token}
+        body = {'about': ''}  # hardcoded for now
+        if name:
+            body['name'] = name
+        if role:
+            body['userRole'] = role
+        if school_name:
+            body['userSchool'] = school_name
+        if district:
+            body['userDistrict'] = district
+        if state:
+            body['profileState'] = state
+
+        response = requests.patch(url, headers=headers, json=body)
+        logger.info(f'[update_elevate_profile] status={response.status_code}')
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        logger.error(f'[update_elevate_profile] request failed: {e}', exc_info=True)
+    except Exception as e:
+        logger.error(f'[update_elevate_profile] unexpected error: {e}', exc_info=True)
     return {}

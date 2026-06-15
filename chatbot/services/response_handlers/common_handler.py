@@ -818,7 +818,7 @@ class CommonResponseHandler(BaseResponseHandler):
 
         profile_id = kwargs.get('profile_id')
         if profile_id:
-            self._save_submitted_user_context(profile_id, arguments)
+            self._save_submitted_user_context(profile_id, arguments, access_token=kwargs.get('access_token'))
 
         llm_extra_content = kwargs.get('llm_extra_content') or {}
         llm_extra_content['profile'] = arguments
@@ -833,7 +833,7 @@ class CommonResponseHandler(BaseResponseHandler):
             **kwargs
         )
 
-    def _save_submitted_user_context(self, profile_id, arguments):
+    def _save_submitted_user_context(self, profile_id, arguments, access_token=None):
         """Persist submit_user_context arguments to Profile and ProfileAddress."""
         from chatbot.models.profile_models import Profile
         from chatbot.models.geo_models import ProfileAddress
@@ -873,6 +873,17 @@ class CommonResponseHandler(BaseResponseHandler):
                     addr_fields.append('state')
                 address.save(update_fields=addr_fields)
                 logger.info(f'[submit_user_context] {"created" if created else "updated"} ProfileAddress for profile id={profile_id} fields={addr_fields}')
+
+            if access_token:
+                from chatbot.utils.elevate.profile_utils import update_elevate_profile
+                update_elevate_profile(
+                    access_token=access_token,
+                    name=arguments.get('name'),
+                    role=arguments.get('role'),
+                    school_name=arguments.get('school_name'),
+                    district=district,
+                    state=state,
+                )
 
         except Exception as e:
             logger.error(f'[submit_user_context] failed to save profile context: {e}', exc_info=True)

@@ -53,6 +53,7 @@ class AsyncSocketConsumer(AsyncBaseConsumer):
                 self.bot_route = text_data_json.get('bot_route')
                 self.flow_name = text_data_json.get('flow_name')
                 self.ip_address = text_data_json.get('address')
+                self.access_token = text_data_json.get('access_token')
 
                 profile = await self.get_profile(self.profile_id)
                 logger.info(
@@ -138,7 +139,7 @@ class AsyncSocketConsumer(AsyncBaseConsumer):
                 # Start the Celery task but don't wait for it
                 get_flow_response.delay(
                     self.channel_name, self.session_id, self.profile_id, self.route,
-                    'common', self.bot_route
+                    'common', self.bot_route, access_token=self.access_token
                 )
 
         except Exception as e:
