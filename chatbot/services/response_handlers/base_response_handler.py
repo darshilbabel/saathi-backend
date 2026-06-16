@@ -545,7 +545,7 @@ class BaseResponseHandler(ABC):
                 params.pop('web_search_options', None)
             print(f'[non_stream] use_web_search={use_web_search} bot.enable_web_search={getattr(company_bot, "enable_web_search", "N/A")} web_search_in_params={"web_search_options" in params}')
             data = call_llm_gateway(
-                messages=gateway_messages, provider=company_bot.provider, model=company_bot.llm_model,
+                messages=gateway_messages, provider=company_bot.provider, model=self._get_effective_model(company_bot),
                 params=params, tools=tools, tool_choice=tool_choice,
             )
             logger.info(f"[gateway] raw response: {data}")
@@ -657,7 +657,7 @@ class BaseResponseHandler(ABC):
             citation_chunks = []
             finish_chunk = None
             for delta_content, tool_use_delta, chunk_finish_reason, chunk_citations, chunk_finish_data in call_llm_gateway_stream(
-                messages=gateway_messages, provider=company_bot.provider, model=company_bot.llm_model,
+                messages=gateway_messages, provider=company_bot.provider, model=self._get_effective_model(company_bot),
                 params=stream_params, tools=tools, tool_choice=tool_choice,
                 cache_policy=cache_policy, metadata=metadata,
             ):
@@ -841,6 +841,16 @@ class BaseResponseHandler(ABC):
             return parsed if isinstance(parsed, type(fallback)) else fallback
         except Exception:
             return fallback
+
+    def _get_effective_model(self, company_bot):
+        """Return the model name to use for gateway calls.
+
+        If other_params contains a 'custom_model' key, that value takes precedence
+        over the llm_model enum field — useful for OpenRouter or any provider that
+        uses model IDs not listed in LLMModel.
+        """
+        custom = (company_bot.other_params or {}).get('custom_model')
+        return custom if custom else company_bot.llm_model
 
     def _with_turn_usage(self, response_data, extra, finish, turn_usage):
         """Return a (response, extra, finish) tuple with turn_usage injected into extra."""
