@@ -43,6 +43,7 @@ class LLMProvider(models.TextChoices):
     BEDROCK = 'bedrock', _('BEDROCK')
     OPENAI = 'openai', _('OPENAI')
     ANTHROPIC = 'anthropic', _('ANTHROPIC')
+    OPENROUTER = 'openrouter', _('Openrouter')
 
 
 class ThemeType(models.TextChoices):
