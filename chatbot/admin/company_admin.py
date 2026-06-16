@@ -294,7 +294,7 @@ class CompanyBotAdmin(BatchUploadMixin, SimpleHistoryAdmin):
 
 @admin.register(CompanyChat)
 class CompanyChatAdmin(ExportAllFieldsMixin, admin.ModelAdmin):
-    list_display = ('session', 'sender', 'receiver', 'message', 'translated_message', 'created_at', 'stage')
+    list_display = ('session', 'sender', 'receiver', 'message', 'translated_message', 'created_at', 'stage', 'status')
     list_filter = (
         CustomAdvanceDateFilter,
         ProfileCompanyChatFilter,
@@ -356,7 +356,7 @@ class CompanyChatAdmin(ExportAllFieldsMixin, admin.ModelAdmin):
 class ChatSessionAdmin(ExportAllFieldsMixin, admin.ModelAdmin):
     list_display = (
         'session', 'get_first_name', 'session_status', 'session_type', 'current_question', 'total_steps',
-        'created_at'
+        'created_at', 'updated_at'
     )
     list_filter = (
         'session',
@@ -403,8 +403,8 @@ class ChatSessionAdmin(ExportAllFieldsMixin, admin.ModelAdmin):
         user_email = request.user.email
         profile = Profile.objects.filter(email=user_email)
         if not user.is_superuser and len(profile) > 0 and profile[0].profile_type == ProfileType.MODERATOR:
-            return 'session', 'get_first_name', 'current_question', 'total_steps', 'session_status', 'created_at'
-        return 'session', 'get_first_name', 'current_question', 'total_steps', 'session_status', 'created_at'
+            return 'session', 'get_first_name', 'current_question', 'total_steps', 'session_status', 'created_at', 'updated_at'
+        return 'session', 'get_first_name', 'current_question', 'total_steps', 'session_status', 'created_at', 'updated_at'
 
     def get_first_name(self, obj):
         return obj.profile.first_name if obj.profile else None
