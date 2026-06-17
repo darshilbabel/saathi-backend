@@ -850,7 +850,11 @@ class BaseResponseHandler(ABC):
         uses model IDs not listed in LLMModel.
         """
         custom = (company_bot.other_params or {}).get('custom_model')
-        return custom if custom else company_bot.llm_model
+        if isinstance(custom, str):
+            custom = custom.strip()
+            if custom:
+                return custom
+        return company_bot.llm_model
 
     def _with_turn_usage(self, response_data, extra, finish, turn_usage):
         """Return a (response, extra, finish) tuple with turn_usage injected into extra."""

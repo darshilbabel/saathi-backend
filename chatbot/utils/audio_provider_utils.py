@@ -64,7 +64,7 @@ def strip_markdown_for_tts(text: str) -> str:
     # Remaining lone asterisks / underscores not attached to word characters
     text = re.sub(r'(?<!\w)[*_]+(?!\w)', '', text)
     # "1: 30" is read as a time by TTS engines — replace colon with comma
-    text = re.sub(r'(\d+):\s+(\d+)', r'\1, \2', text)
+    text = re.sub(r'(?<!\d)(\d+)\s*:\s*(\d+)(?!\d)', r'\1, \2', text)
     # Collapse 3+ consecutive newlines → 2
     text = re.sub(r'\n{3,}', '\n\n', text)
     # Collapse multiple spaces/tabs → single space
