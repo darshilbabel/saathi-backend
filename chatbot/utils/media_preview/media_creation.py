@@ -434,7 +434,7 @@ def create_docx_from_args(
 
             if arguments.get('duration'):
                 doc.add_heading(lang_constants.get('timeline_label', 'Timeline'), level=2)
-                doc.add_paragraph(f"{lang_constants.get('duration_prefix', 'Duration')}: {arguments['duration']}")
+                doc.add_paragraph(arguments['duration'])
 
             action_plan = arguments.get('action_plan') or []
             if action_plan:
