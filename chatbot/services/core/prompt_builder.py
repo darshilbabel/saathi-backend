@@ -12,15 +12,19 @@ class PromptBuilder:
 
     @staticmethod
     def build_system_prompt(company_bot, state_machine=None, profile=None):
-        system_parts = [company_bot.context.strip()]
+        address = profile.profile_address.all().first() if profile else None
+        context_data = {"profile": profile, "address": address}
+
+        system_parts = [PromptBuilder._render_template(company_bot.context, context_data)]
 
         if state_machine and state_machine.context:
-            system_parts.append(state_machine.context.strip())
+            system_parts.append(PromptBuilder._render_template(state_machine.context, context_data))
 
         if state_machine and state_machine.completion_criteria:
-            system_parts.append(f"Completion Criteria:\n{state_machine.completion_criteria.strip()}")
+            rendered = PromptBuilder._render_template(state_machine.completion_criteria, context_data)
+            system_parts.append(f"Completion Criteria:\n{rendered}")
 
-        rendered_tag_context = PromptBuilder._render_tag_context(company_bot, profile)
+        rendered_tag_context = PromptBuilder._render_tag_context(company_bot, context_data)
         if rendered_tag_context:
             system_parts.append(rendered_tag_context)
 
@@ -28,31 +32,28 @@ class PromptBuilder:
         if dynamic_context:
             system_parts.append(dynamic_context)
 
-        return "\n\n".join(system_parts)
+        final_prompt = "\n\n".join(system_parts)
+        return final_prompt
 
     @staticmethod
-    def _render_tag_context(company_bot, profile):
+    def _render_template(text, context_data):
+        if not text or not text.strip():
+            return text or ""
+        try:
+            return Template(text).render(context_data).strip()
+        except UndefinedError as e:
+            logger.info("template variable missing: %s", e)
+            return text.strip()
+        except Exception as e:
+            logger.error("Failed to render template: %s", e, exc_info=True)
+            return text.strip()
+
+    @staticmethod
+    def _render_tag_context(company_bot, context_data):
         tag_context = company_bot.tag_context
         if not tag_context or not tag_context.strip():
             return ""
-
-        try:
-            address = None
-            if profile:
-                address = profile.profile_address.all().first()
-
-            context_data = {
-                "profile": profile,
-                "address": address,
-            }
-
-            return Template(tag_context).render(context_data).strip()
-        except UndefinedError as e:
-            logger.warning("tag_context template variable missing: %s", e)
-            return tag_context.strip()
-        except Exception as e:
-            logger.error("Failed to render tag_context: %s", e, exc_info=True)
-            return tag_context.strip()
+        return PromptBuilder._render_template(tag_context, context_data)
 
 
     @staticmethod

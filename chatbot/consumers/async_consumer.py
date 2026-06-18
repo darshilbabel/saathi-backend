@@ -66,9 +66,15 @@ class AsyncSocketConsumer(AsyncBaseConsumer):
                 self.company_bot = await self.get_company_bot(profile, self.bot_route)
 
                 # Create chat session asynchronously
-                await self.create_chat_session(
+                _, session_created = await self.create_chat_session(
                     self.session_id, profile, self.company_bot, self.ip_address, user_id
                 )
+
+                if not session_created:
+                    company_chat_status = await self.determine_company_chat_status_async(
+                        session_id=self.session_id, profile_id=self.profile_id, route=self.bot_route
+                    )
+                    await self.update_session_status(chat_status=company_chat_status)
             else:
                 # Validate that user is authenticated before processing messages
                 if not self.session_id or not self.bot_route:
@@ -129,6 +135,8 @@ class AsyncSocketConsumer(AsyncBaseConsumer):
                     translated_message=translated_message, audio_base64=text_data_json.get('asr_audio'),
                     stage=current_stage
                 )
+                if company_chat_status == ChatStatus.IN_PROGRESS:
+                    await self.update_session_status(chat_status=company_chat_status)
 
             logger.info(
                 f"channel_name: %s, session_id: %s, profile_id: %s, route: %s",
@@ -230,7 +238,7 @@ class AsyncSocketConsumer(AsyncBaseConsumer):
             cs.save(update_fields=["other_params"])
 
 
-        return cs
+        return cs, cs_created
 
     @database_sync_to_async
     def translate_message(self, message):

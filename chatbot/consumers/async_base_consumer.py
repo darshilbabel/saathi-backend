@@ -1,7 +1,8 @@
 import json
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
-from chatbot.models import ChatSession, CompanyChat, ChatStatus, Profile, CompanyBot
+from django.db.models import Max
+from chatbot.models import ChatSession, CompanyChat, ChatStatus, Profile, CompanyBot, CompanyBotTypeChoices
 from chatbot.models.company_models import CompanyStateMachine
 import logging
 import traceback
@@ -67,19 +68,34 @@ class AsyncBaseConsumer(AsyncWebsocketConsumer):
             else:
                 company_bot = CompanyBot.objects.get(route=route)
 
+            existing_chats = CompanyChat.objects.filter(session=session_id)
+
+            if company_bot.bot_type == CompanyBotTypeChoices.SIMPLE:
+                if existing_chats.exclude(sender_id=1).count() == 0:
+                    return ChatStatus.STARTED
+                if is_disconnected:
+                    return ChatStatus.PAUSED
+                last_chat = existing_chats.last()
+                if last_chat and last_chat.status == ChatStatus.PAUSED:
+                    return ChatStatus.RESUME
+                return ChatStatus.IN_PROGRESS
+
             state_machine = CompanyStateMachine.objects.filter(
                 company_bot=company_bot, step=chat_session.current_step
             ).first()
 
-            existing_chats = CompanyChat.objects.filter(session=session_id)
+            max_step = CompanyStateMachine.objects.filter(
+                company_bot=company_bot
+            ).aggregate(Max('step'))['step__max']
+            is_last_step = state_machine and state_machine.step == max_step
 
-            if existing_chats.count() == 0:
+            if existing_chats.exclude(sender_id=1).count() == 0:
                 return ChatStatus.STARTED
-            elif state_machine and state_machine.name != 'APPRECIATION' and is_disconnected:
+            elif state_machine and not is_last_step and is_disconnected:
                 return ChatStatus.PAUSED
             elif existing_chats.exists():
                 last_chat = existing_chats.last()
-                if last_chat.status == ChatStatus.PAUSED:
+                if last_chat and last_chat.status == ChatStatus.PAUSED:
                     return ChatStatus.RESUME
             elif chat_session and chat_session.session_status == ChatStatus.COMPLETED:
                 return ChatStatus.COMPLETED
@@ -106,8 +122,25 @@ class AsyncBaseConsumer(AsyncWebsocketConsumer):
             if existing_chat.status != ChatStatus.COMPLETED:
                 existing_chat.status = chat_status
                 existing_chat.save()
+
+            chat_session = ChatSession.objects.filter(session=self.session_id).first()
+            if chat_session and chat_session.session_status != ChatStatus.COMPLETED:
+                chat_session.session_status = chat_status
+                chat_session.save(update_fields=['session_status', 'updated_at'])
         except Exception as e:
             logger.info('Error in update_last_chat_status: %s', e, exc_info=True)
 
     async def update_last_chat_status_async(self, chat_status):
         await self.update_last_chat_status(chat_status)
+
+    @database_sync_to_async
+    def update_session_status(self, chat_status):
+        if not hasattr(self, 'session_id') or not self.session_id:
+            return
+        try:
+            chat_session = ChatSession.objects.filter(session=self.session_id).first()
+            if chat_session and chat_session.session_status != ChatStatus.COMPLETED:
+                chat_session.session_status = chat_status
+                chat_session.save(update_fields=['session_status', 'updated_at'])
+        except Exception as e:
+            logger.info('Error in update_session_status: %s', e, exc_info=True)
