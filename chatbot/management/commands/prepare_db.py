@@ -10,8 +10,8 @@ Usage:
 Environment Variables:
     POSTGRES_SCHEMAS: Comma-separated list of schema names to create (e.g., "schema1,schema2,schema3")
     COMPANY_NAME: Company name (default: "Shikshalokam")
-    COMPANY_SLUG: Company slug (default: "shikshalokam")
-    ADMIN_EMAIL: Admin email (default: "accounts@gritworks.ai")
+    COMPANY_SLUG: Company slug (default: "shikshalokamstaging")
+    ADMIN_EMAIL: Admin email (default: "ai@shikshalokam.org")
 """
 
 import os
@@ -207,7 +207,7 @@ class Command(BaseCommand):
         try:
             # Get environment variables
             company_name = os.environ.get('COMPANY_NAME', 'Shikshalokam')
-            company_slug = os.environ.get('COMPANY_SLUG', 'shikshalokam')
+            company_slug = os.environ.get('COMPANY_SLUG', 'shikshalokamstaging')
 
             self.stdout.write(f'  Company Name: {company_name}')
             self.stdout.write(f'  Company Slug: {company_slug}\n')
@@ -262,7 +262,7 @@ class Command(BaseCommand):
 
         try:
             # Get environment variable
-            admin_email = os.environ.get('ADMIN_EMAIL', 'admin@shikshalokam.org')
+            admin_email = os.environ.get('ADMIN_EMAIL', 'ai@shikshalokam.org')
             admin_first_name = 'AI'
 
             self.stdout.write(f'  Admin Email: {admin_email}')
