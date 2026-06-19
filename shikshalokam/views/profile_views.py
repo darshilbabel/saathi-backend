@@ -37,12 +37,18 @@ def read_elevate_profile(request):
             'message': 'Failed to fetch or create profile from Elevate.'
         }, status=500)
 
+    company_slug = os.getenv('DEFAULT_COMPANY_SLUG')
+    if not company_slug:
+        logger.error('[read_elevate_profile] DEFAULT_COMPANY_SLUG is not set')
+        return Response({'status': 'error', 'message': 'Server misconfiguration.'}, status=500)
+
     logger.info('[read_elevate_profile] profile=%s', profile_details.get('profileid'))
     return Response({
         'status': 'ok',
         'profile_details': {
             'profileid': profile_details.get('profileid'),
-            'has_accepted_tnc': profile_details.get('has_accepted_tnc'),
+            'company': company_slug,
+            'has_accepted_tnc': "ONGOING",
             'route': profile_details.get('route'),
             'reroute_url': profile_details.get('reroute_url'),
         }

@@ -36,7 +36,10 @@ class AsyncBaseConsumer(AsyncWebsocketConsumer):
             logger.error('Receive Error: %s', e, exc_info=True)
 
         finally:
-            await self.close()
+            try:
+                await self.close()
+            except Exception:
+                pass
 
     async def receive(self, text_data):
         raise NotImplementedError("receive method must be implemented in subclass")
