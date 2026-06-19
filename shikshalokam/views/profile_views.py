@@ -1,11 +1,16 @@
+import os
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from chatbot.utils.elevate.profile_utils import handle_elevate_profile
 
+ACCESS_TOKEN_COOKIE_KEY = os.getenv('ACCESS_TOKEN_COOKIE_KEY')
+
 
 @api_view(['GET'])
 def read_elevate_profile(request):
-    access_token = request.headers.get('X-auth-token')
+    access_token = request.COOKIES.get(ACCESS_TOKEN_COOKIE_KEY) if ACCESS_TOKEN_COOKIE_KEY else None
+    if not access_token:
+        access_token = request.headers.get('X-auth-token')
     print("Access token: ", access_token)
 
     if not access_token:
