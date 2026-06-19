@@ -10,7 +10,7 @@
 
 ---
 
-## 1. Install Python 3.10 and uv Dependency Manager
+## 1. Install Python 3.10
 
 ```bash
 brew install python@3.10
@@ -22,34 +22,38 @@ Verify installation:
 python3.10 --version
 ```
 
-Install uv:
-```base
-pip install uv
-```
-
 ---
 
-## 2. Create a Virtual Environment (Outside Project Directory)
+## 2. Install uv and Set Up Virtual Environment
 
-Assuming your project is located at:
+### Step 1: Install uv
 
-```
-/Users/kunal/PycharmProjects/shikshalokam-mohini-service
-```
-
-### Step 1: Go to the project directory
+Install uv using the official installer. Follow the instructions at:
+https://docs.astral.sh/uv/getting-started/installation/
 
 ```bash
-cd /Users/kunal/PycharmProjects/shikshalokam-mohini-service
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-### Step 2: Create the virtual environment
+Restart your shell or run `source $HOME/.local/bin/env` to make `uv` available.
+
+### Step 2: Go to the project directory
 
 ```bash
-uv venv
+cd /path/to/saathi-backend
 ```
 
-### Step 3: Activate the virtual environment
+### Step 3: Create the virtual environment and install dependencies
+
+`uv sync` will automatically create a `.venv` directory and install all dependencies:
+
+```bash
+uv sync
+```
+
+> After this, refer to [system_dependencies.md](system_dependencies.md) and follow the steps there to install required system-level binaries (poppler, ffmpeg, etc.).
+
+### Step 4: Activate the virtual environment
 
 ```bash
 source .venv/bin/activate
@@ -59,21 +63,37 @@ source .venv/bin/activate
 
 ## 3. Install Project Dependencies
 
-```bash
-uv sync
-```
+Dependencies are installed automatically when you run `uv sync` in Step 2. Re-run it any time `pyproject.toml` or `uv.lock` changes.
 
 ---
 
-## 4. Load Environment Variables
+## 4. Load Environment Variables and Secrets
 
-Make sure you have a `.env` file in the project root.
+Make sure you have a `.env` file in the project root, and a `secrets.json` file inside the `config/` folder at the project root (i.e. `config/secrets.json`). Both files contain sensitive credentials and are not committed to version control — get them from the team.
+
+Create the `config/` folder and an empty `secrets.json` if they don't exist yet:
+
+```bash
+mkdir -p config && touch config/secrets.json
+```
+
+Export env vars for the current shell session:
 
 ```bash
 export $(cat .env | xargs)
 ```
 
 > ⚠️ Note: This exports variables only for the current shell session.
+
+---
+
+## 4a. Create Logs Directory
+
+Create a `logs/` folder in the project root with the required log files:
+
+```bash
+mkdir -p logs && touch logs/info.log logs/error.log logs/debug.log
+```
 
 ---
 
@@ -84,13 +104,13 @@ export $(cat .env | xargs)
 Using Homebrew:
 
 ```bash
-brew install postgresql@14
+brew install postgresql@17
 ```
 
 Start PostgreSQL:
 
 ```bash
-brew services start postgresql@14
+brew services start postgresql@17
 ```
 
 Verify it’s running:
@@ -101,30 +121,43 @@ psql --version
 
 ---
 
-### 5.2 Create Database and User
+### 5.2 Create Database, User, and Schema
 
 Login to Postgres:
 
 ```bash
-psql postgres
+psql -d postgres
 ```
 
 Create a database user:
 
 ```sql
-CREATE USER mitra_user WITH PASSWORD 'mitra_password';
+CREATE USER mitra_user WITH PASSWORD ‘mitra_password’;
 ```
 
 Create the database:
 
 ```sql
-CREATE DATABASE mitra_db OWNER mitra_user;
+CREATE DATABASE saathi OWNER mitra_user;
 ```
 
 Grant privileges:
 
 ```sql
-GRANT ALL PRIVILEGES ON DATABASE mitra_db TO mitra_user;
+GRANT ALL PRIVILEGES ON DATABASE saathi TO mitra_user;
+```
+
+Connect to the new database:
+
+```sql
+\c saathi
+```
+
+Create the `shikshalokam` schema:
+
+```sql
+CREATE SCHEMA shikshalokam;
+GRANT ALL ON SCHEMA shikshalokam TO mitra_user;
 ```
 
 Exit psql:
@@ -140,24 +173,16 @@ Exit psql:
 Add or update the following variables in your `.env` file:
 
 ```env
-DATABASE_NAME=mitra_db
+DATABASE_NAME=saathi
 DATABASE_USER=mitra_user
 DATABASE_PASSWORD=mitra_password
 DATABASE_HOST=localhost
 DATABASE_PORT=5432
 ```
 
-### 5.4 Install PostgreSQL Python Driver
-
-Make sure this dependency exists (usually already in `requirements.in`):
-
-```bash
-uv pip install psycopg2-binary
-```
-
 ---
 
-### 5.5 Run Django Migrations
+### 5.4 Run Django Migrations and Seed Data
 
 Ensure your virtual environment is active and env vars are loaded:
 
@@ -165,20 +190,24 @@ Ensure your virtual environment is active and env vars are loaded:
 export $(cat .env | xargs)
 ```
 
-Run migrations:
+Run the `prepare_db` command — this handles everything in one shot: creates the `shikshalokam` PostgreSQL schema, runs all migrations, and seeds the initial Company ("Shikshalokam" / slug `shikshalokamstaging`) and AI profile (`ai@shikshalokam.org`):
 
 ```bash
-python3 manage.py migrate
+python3 manage.py prepare_db
 ```
 
 (Optional) Create a superuser:
 
-You can accept the default name and give any password, keep email 
-empty and just press enter till completed.
-
 ```bash
 python3 manage.py createsuperuser
 ```
+
+When prompted:
+1. **Username**: enter `admin`
+2. **Email**: press Enter to skip
+3. **Password**: enter any password
+4. **Password (again)**: re-enter the same password
+5. If asked to bypass password validation, enter `y` and press Enter
 
 ---
 
@@ -187,7 +216,7 @@ python3 manage.py createsuperuser
 **Postgres not starting**
 
 ```bash
-brew services restart postgresql@14
+brew services restart postgresql@17
 ```
 
 **Role does not exist**
@@ -231,12 +260,7 @@ celery -A shikshalokam_mohini worker --pool=threads
 ## Notes
 
 * Ensure Redis or any other required backing services are running before starting Celery.
-* Always activate `mitra_env` before running server or worker commands.
-
----
-
-Perfect, let’s plug **Redis setup** into the README cleanly 👌
-You can add this as the next section.
+* Always activate the virtual environment before running server or worker commands.
 
 ---
 
@@ -292,3 +316,59 @@ brew services restart redis
 ```bash
 lsof -i :6379
 ```
+
+---
+
+## 9. Git Workflow — Working on the Right Branch
+
+Before writing any code, make sure you are branching off the correct base branch.
+
+### Step 1: Check your remote
+
+```bash
+git remote -v
+```
+
+This shows what remote repositories you are pointing to. If you do not see the Elevate GitHub repository listed, add it as a remote named `elevate`:
+
+```bash
+git remote add elevate https://github.com/<org>/<repo>.git
+```
+
+Replace `<org>/<repo>` with the actual repository path. Then verify it was added:
+
+```bash
+git remote -v
+```
+
+### Step 2: Fetch all remote branches
+
+```bash
+git fetch --all
+```
+
+This updates your local knowledge of all remote branches without changing your working directory.
+
+### Step 3: List remote branches to find the latest official branch
+
+```bash
+git branch -r
+```
+
+Look for the latest release branch (e.g. `origin/release-1.0.0`) or whatever branch the team is currently working from. Confirm with your team if unsure.
+
+### Step 4: Create your local branch from the official branch
+
+It is better to branch off the upstream remote (e.g. `elevate`) rather than `origin`, so your base is always the canonical source of truth. Check `git remote -v` to confirm which remote name points to the upstream repo.
+
+```bash
+git checkout -b your-feature-branch elevate/release-1.0.0
+```
+
+If your upstream remote is named differently (e.g. `origin`), replace `elevate` with that name:
+
+```bash
+git checkout -b your-feature-branch origin/release-1.0.0
+```
+
+Replace `release-1.0.0` with the actual latest branch name if it differs. Confirm with your team which branch is currently active.
