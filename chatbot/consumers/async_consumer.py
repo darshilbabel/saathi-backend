@@ -62,18 +62,12 @@ class AsyncSocketConsumer(AsyncBaseConsumer):
                 elevate_result = await self.sync_elevate_profile(self.access_token)
                 if elevate_result.get('error') == 'unauthorized':
                     logger.error('[authenticate] Elevate auth failure — closing connection')
-                    await self.channel_layer.send(
-                        self.channel_name,
-                        {"type": "chat_message", "text": {"msg": "Authentication failed. Invalid or expired token.", "source": "system", "error": True}},
-                    )
+                    await self.send(text_data=json.dumps({"msg": "Authentication failed. Invalid or expired token.", "source": "system", "error": True}))
                     await self.close()
                     return
                 if elevate_result.get('error') == 'elevate_server_error':
                     logger.error('[authenticate] Elevate server error — closing connection')
-                    await self.channel_layer.send(
-                        self.channel_name,
-                        {"type": "chat_message", "text": {"msg": "Service unavailable. Please try again later.", "source": "system", "error": True}},
-                    )
+                    await self.send(text_data=json.dumps({"msg": "Service unavailable. Please try again later.", "source": "system", "error": True}))
                     await self.close()
                     return
                 if elevate_result.get('profileid'):
@@ -194,7 +188,7 @@ class AsyncSocketConsumer(AsyncBaseConsumer):
     def handle_access_token(self, access_token):
         user_id = None
 
-        if access_token:
+        if access_token and PUBLIC_KEY:
             try:
                 decoded = jwt.decode(
                     access_token,
@@ -205,6 +199,8 @@ class AsyncSocketConsumer(AsyncBaseConsumer):
                     user_id = decoded.get("data", {}).get("id")
             except Exception as e:
                 logger.error('[handle_access_token] JWT decode error: %s', e, exc_info=True)
+        elif access_token and not PUBLIC_KEY:
+            logger.error('[handle_access_token] JWT_PUBLIC_KEY is not set — skipping decode')
 
         logger.info('[handle_access_token] user_id=%s', user_id)
         return user_id
