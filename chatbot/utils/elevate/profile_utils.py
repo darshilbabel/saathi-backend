@@ -16,6 +16,10 @@ def _safe_body(response):
 
 def handle_elevate_profile(access_token):
     try:
+        if not elevate_base_url:
+            logger.error('[handle_elevate_profile] ELEVATE_BASE_URL is not configured')
+            return {'error': 'elevate_server_error', 'status_code': 502}
+
         url = f"{elevate_base_url}/user/v1/user/read"
         headers = {
             'X-auth-token': access_token
