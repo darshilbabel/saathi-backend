@@ -110,6 +110,8 @@ def handle_elevate_profile(access_token):
         }
         return profile_response
 
+    except requests.exceptions.HTTPError:
+        raise
     except requests.exceptions.RequestException as e:
         print(f"Request failed: {e}")
     except Exception as e:

@@ -24,7 +24,6 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 CODE_BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 LOGGING_DIR = CODE_BASE_DIR + '/logs'
-
 def load_secrets():
     paths_to_try = [
         '/home/ubuntu/saathi-backend/config/secrets.json',
@@ -112,6 +111,7 @@ INSTALLED_APPS = [
     'simple_history',
     'storages',
     'django_crontab',
+    'log_viewer',
 ]
 
 MIDDLEWARE = [
@@ -125,7 +125,8 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 
     ## extra middlwares
-    'chatbot.middlewares.VerifyAuthToken'
+    'chatbot.middlewares.VerifyAuthToken',
+    'shikshalokam_mohini.middleware.StaffRequiredForLogViewer',
 ]
 
 if DEBUG:
@@ -139,7 +140,7 @@ ROOT_URLCONF = 'shikshalokam_mohini.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [os.path.join(CODE_BASE_DIR, 'templates')],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -401,7 +402,9 @@ JAZZMIN_SETTINGS = {
     'copyright': 'Shikshalokam',
     'show_ui_builder': False,
     'changeform_format': 'single',
-
+    'topmenu_links': [
+        {'name': 'Application Logs', 'url': '/log-viewer/', 'permissions': ['auth.view_user']},
+    ],
 }
 
 JAZZMIN_UI_TWEAKS = {
@@ -476,6 +479,11 @@ LOGGING = {
 }
 
 ASGI_APPLICATION_SHUTDOWN_TIMEOUT = 30
+
+LOG_VIEWER_FILES_PATTERN = '*.log*'
+LOG_VIEWER_FILES_DIR = LOGGING_DIR
+LOG_VIEWER_PATTERNS = ["INFO", "DEBUG", "WARNING", "ERROR", "CRITICAL"]
+LOG_VIEWER_FILE_LIST_TITLE = "Application Logs"
 
 CRONJOBS = [
     # ('30 2 * * *', 'chatbot.cron_tasks.chaupal.chaupal_cront_tasks.handle_story_cleanup_cron',

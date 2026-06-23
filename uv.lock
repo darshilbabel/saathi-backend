@@ -1032,6 +1032,12 @@ wheels = [
 ]
 
 [[package]]
+name = "django-log-viewer"
+version = "1.1.8"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/aa/27/e498b28c07b7977693abe66e7668eca5fd82ee0045e4fa12f06643f9f5f7/django_log_viewer-1.1.8.tar.gz", hash = "sha256:3b70837cc1877356831a5d4831d30426809ccd12a0705b7fb11512ee17f3b50a", size = 76756, upload-time = "2025-04-14T12:30:13.976Z" }
+
+[[package]]
 name = "django-querycount"
 version = "0.8.3"
 source = { registry = "https://pypi.org/simple" }
@@ -4513,6 +4519,7 @@ dependencies = [
     { name = "django-filter" },
     { name = "django-import-export" },
     { name = "django-jazzmin" },
+    { name = "django-log-viewer" },
     { name = "django-querycount" },
     { name = "django-redis" },
     { name = "django-s3-storage" },
@@ -4603,6 +4610,7 @@ requires-dist = [
     { name = "django-filter", specifier = ">=25.2" },
     { name = "django-import-export", specifier = ">=4.4.0" },
     { name = "django-jazzmin", specifier = ">=3.0.1" },
+    { name = "django-log-viewer", specifier = ">=1.1.8" },
     { name = "django-querycount", specifier = ">=0.8.3" },
     { name = "django-redis", specifier = ">=6.0.0" },
     { name = "django-s3-storage", specifier = ">=0.15.0" },
