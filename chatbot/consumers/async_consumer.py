@@ -1,5 +1,4 @@
 import json
-import traceback
 import os
 from django.conf import settings
 from chatbot.celery_tasks.common_chat_tasks import save_in_company_db
@@ -9,6 +8,7 @@ from chatbot.models import ChatStatus, ChatSession, Profile, CompanyBot, Voice, 
 from chatbot.celery_tasks.flow_tasks import get_flow_response
 from chatbot.models.company_models import CompanyStateMachine
 from chatbot.utils.audio_provider_utils import text_translate_provider
+from chatbot.utils.elevate.profile_utils import handle_elevate_profile
 import logging
 from channels.db import database_sync_to_async
 from chatbot.utils.transliterate_utils import transliterate_text
@@ -29,6 +29,7 @@ class AsyncSocketConsumer(AsyncBaseConsumer):
         self.flow_name = None
         self.ip_address = None
         self.access_token = None
+        self.ums_profile = None
         self.background_tasks = set()
 
     async def disconnect(self, code):
@@ -48,6 +49,7 @@ class AsyncSocketConsumer(AsyncBaseConsumer):
             company_chat_status = None
             if message_type == 'authenticate':
                 self.session_id = text_data_json.get('sessionid')
+                # fallback for non-Elevate flows
                 self.profile_id = text_data_json.get('profileid')
                 self.route = text_data_json.get('route')
                 self.bot_route = text_data_json.get('bot_route')
@@ -55,13 +57,34 @@ class AsyncSocketConsumer(AsyncBaseConsumer):
                 self.ip_address = text_data_json.get('address')
                 self.access_token = text_data_json.get('access_token')
 
+                user_id = await self.handle_access_token(self.access_token)
+
+                elevate_result = await self.sync_elevate_profile(self.access_token)
+                if elevate_result.get('error') == 'unauthorized':
+                    logger.error('[authenticate] Elevate auth failure — closing connection')
+                    await self.channel_layer.send(
+                        self.channel_name,
+                        {"type": "chat_message", "text": {"msg": "Authentication failed. Invalid or expired token.", "source": "system", "error": True}},
+                    )
+                    await self.close()
+                    return
+                if elevate_result.get('error') == 'elevate_server_error':
+                    logger.error('[authenticate] Elevate server error — closing connection')
+                    await self.channel_layer.send(
+                        self.channel_name,
+                        {"type": "chat_message", "text": {"msg": "Service unavailable. Please try again later.", "source": "system", "error": True}},
+                    )
+                    await self.close()
+                    return
+                if elevate_result.get('profileid'):
+                    self.profile_id = elevate_result['profileid']
+                    self.ums_profile = elevate_result.get('ums_profile')
+
                 profile = await self.get_profile(self.profile_id)
                 logger.info(
-                    f"channel_name: %s, session_id: %s, profile_id: %s, route: %s",
+                    'channel_name: %s, session_id: %s, profile_id: %s, route: %s',
                     self.channel_name, self.session_id, self.profile_id, self.route
                 )
-
-                user_id = await self.handle_access_token(self.access_token)
 
                 self.company_bot = await self.get_company_bot(profile, self.bot_route)
 
@@ -147,12 +170,12 @@ class AsyncSocketConsumer(AsyncBaseConsumer):
                 # Start the Celery task but don't wait for it
                 get_flow_response.delay(
                     self.channel_name, self.session_id, self.profile_id, self.route,
-                    'common', self.bot_route, access_token=self.access_token
+                    'common', self.bot_route, access_token=self.access_token,
+                    ums_profile=self.ums_profile
                 )
 
         except Exception as e:
             logger.error('Receive Error: %s', e, exc_info=True)
-            traceback.print_exc()
 
     async def connect(self):
         try:
@@ -160,7 +183,6 @@ class AsyncSocketConsumer(AsyncBaseConsumer):
             await super().connect()
         except Exception as e:
             logger.error('Connect Error: %s', e, exc_info=True)
-            traceback.print_exc()
 
     @database_sync_to_async
     def get_profile(self, profile_id):
@@ -173,27 +195,27 @@ class AsyncSocketConsumer(AsyncBaseConsumer):
         user_id = None
 
         if access_token:
-            print("Access Token: ", access_token)
-
             try:
                 decoded = jwt.decode(
                     access_token,
                     PUBLIC_KEY,
                     algorithms=["HS256"]
                 )
-                print("Decoded JWT: ", decoded)
                 if decoded:
                     user_id = decoded.get("data", {}).get("id")
             except Exception as e:
-                logger.error('JWT Decode Error: %s', e, exc_info=True)
-                print(f"JWT Decode Error: {e}")
+                logger.error('[handle_access_token] JWT decode error: %s', e, exc_info=True)
 
-        logger.info("User_id: %s", user_id)
+        logger.info('[handle_access_token] user_id=%s', user_id)
         return user_id
 
     @database_sync_to_async
+    def sync_elevate_profile(self, access_token):
+        return handle_elevate_profile(access_token)
+
+    @database_sync_to_async
     def get_company_bot(self, profile, route):
-        if profile:
+        if profile and profile.company_id:
             return CompanyBot.objects.get(company=profile.company, route=route)
         else:
             return CompanyBot.objects.get(route=route)
@@ -273,10 +295,9 @@ class AsyncSocketConsumer(AsyncBaseConsumer):
                     voice_provider=transliterate_voice_provider, source_language=self.route, target_language='en',
                     message_body=message, is_sentence=True
                 )
-                print("Trans response: ", response)
+                logger.info('[translate_message] transliterate response=%s', response)
                 if response and response.get('content'):
                     content = response.get('content')
-                    print("Trans content: ", content)
                     if content and isinstance(content, list) and len(content)>0:
                         content = content[0]
                     return content

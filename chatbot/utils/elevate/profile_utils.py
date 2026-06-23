@@ -1,12 +1,18 @@
 import os
 import logging
 import requests
-from chatbot.models import Profile, Company, SessionFlowName
-from chatbot.models.geo_models import ProfileAddress
-import json_repair
+from chatbot.models import Profile
 
 logger = logging.getLogger('django')
 elevate_base_url = os.getenv('ELEVATE_BASE_URL')
+
+
+def _safe_body(response):
+    try:
+        return response.text
+    except Exception:
+        return '<unreadable>'
+
 
 def handle_elevate_profile(access_token):
     try:
@@ -14,27 +20,41 @@ def handle_elevate_profile(access_token):
         headers = {
             'X-auth-token': access_token
         }
-        response = requests.get(url=url, headers=headers)
-        print("Read status: ", response.status_code)
+        response = requests.get(url=url, headers=headers, timeout=30)
+        logger.info('[handle_elevate_profile] status=%s', response.status_code)
+
+        if response.status_code == 401:
+            logger.error('[handle_elevate_profile] unauthorized — token invalid or expired body=%s', _safe_body(response))
+            return {'error': 'unauthorized', 'status_code': 401}
+
+        if response.status_code >= 500:
+            logger.error('[handle_elevate_profile] Elevate server error status=%s body=%s', response.status_code, _safe_body(response))
+            return {'error': 'elevate_server_error', 'status_code': response.status_code}
+
         response.raise_for_status()
 
         json_data = response.json()
-        print(json_data)
 
         if json_data.get('responseCode', '').lower() != 'ok':
-            print("Unexpected response code:", json_data.get('responseCode'))
+            logger.error('[handle_elevate_profile] unexpected responseCode=%s', json_data.get('responseCode'))
             return {}
 
         user_data = json_data.get('result', {})
-        full_name = user_data.get('name', '')
-        first_name, last_name = (full_name.split(' ', 1) + [''])[:2]
-        phone = user_data.get('phone')
-        email = user_data.get('email')
+        userid = user_data.get('id')
+
+        if not userid:
+            logger.error('[handle_elevate_profile] no userid in Elevate response')
+            return {}
+
         language = user_data.get('preferred_language')
+        if isinstance(language, dict):
+            language = language.get('value', 'en')
+        elif not language:
+            language = 'en'
+
         raw_designation = user_data.get('userRole')
-        designation_value = None
         if isinstance(raw_designation, dict):
-            designation_value = raw_designation.get('label') or raw_designation
+            designation_value = raw_designation.get('label')
         elif isinstance(raw_designation, str):
             designation_value = raw_designation
         else:
@@ -43,79 +63,38 @@ def handle_elevate_profile(access_token):
         raw_school = user_data.get('userSchool')
         school_name = raw_school.get('label') if isinstance(raw_school, dict) else raw_school
 
-        if language:
-            if isinstance(language, dict):
-                language = language.get('value', 'en')
-            else:
-                language = user_data.get('preferred_language')
-        else:
-            language = 'en'
+        state = user_data.get('profileState') or {}
+        district = user_data.get('userDistrict') or {}
 
-        company = Company.objects.filter(slug='shikshalokamstaging').first()
-
-        if (not email or email == '') and phone and phone != '':
-            email = f"{phone}@shikshalokam.org"
-
-        if not email or email == '':
-            print("No valid email or phone found to generate email.")
-            return {}
-
-        profile, _ = Profile.objects.update_or_create(
-            email=email,
-            defaults={
-                'first_name': first_name,
-                'last_name': last_name,
-                'phone': user_data.get('phone'),
-                'status': user_data.get('status', 'ACTIVE'),
-                'company': company,
-                'password': "grit@123",
-                'latest_flow_used': SessionFlowName.LoginMiStory,
-                'location': user_data.get('location'),
-                'designation': designation_value,
-                'org_associated': school_name,
-                'source': 'elevate',
-                'preferred_route': language,
-            }
+        profile, created = Profile.objects.update_or_create(
+            userid=userid,
+            defaults={'source': 'elevate'}
         )
-        existing_other_params = profile.other_params or {}
-        existing_other_params['elevate_profile_details'] = user_data
-        profile.other_params = existing_other_params
-        profile.save(update_fields=['other_params'])
+        logger.info('[handle_elevate_profile] profile %s userid=%s', 'created' if created else 'updated', userid)
 
-        state = user_data.get('profileState', {})
-        district = user_data.get('userDistrict', {})
-        block = user_data.get('block', {})
-
-        if state.get('label') or district.get('label') or block.get('label'):
-            ProfileAddress.objects.update_or_create(
-                profile=profile,
-                defaults={
-                    'state': state.get('label'),
-                    'district': district.get('label'),
-                    'block': block.get('label'),
-                }
-            )
-            print("ProfileAddress updated or created successfully")
-
-        profile_address = ProfileAddress.objects.filter(profile=profile).first()
-
-        profile_response = {
-            "first_name": profile.first_name,
-            "company": profile.company.slug if profile.company else None,
-            "state": profile_address.state if profile_address else None,
-            "has_accepted_tnc": "ONGOING",
-            "route": profile.preferred_route,
+        return {
             "profileid": profile.id,
-            'reroute_url': os.getenv('SSO_REROUTE_URL')
+            "has_accepted_tnc": (profile.other_params or {}).get('is_tnc_accepted', False),
+            "route": language,
+            "reroute_url": os.getenv('SSO_REROUTE_URL'),
+            "ums_profile": {
+                "designation": designation_value,
+                "org_associated": school_name,
+                "district": district.get('label'),
+                "state": state.get('label'),
+                "preferred_route": language,
+            }
         }
-        return profile_response
 
-    except requests.exceptions.HTTPError:
-        raise
+    except requests.exceptions.HTTPError as e:
+        upstream_status = e.response.status_code if e.response is not None else None
+        logger.error('[handle_elevate_profile] HTTP error status=%s body=%s', upstream_status, _safe_body(e.response) if e.response is not None else '')
+        return {'error': 'elevate_server_error', 'status_code': upstream_status}
     except requests.exceptions.RequestException as e:
-        print(f"Request failed: {e}")
+        logger.error('[handle_elevate_profile] request failed: %s', e, exc_info=True)
+        return {'error': 'elevate_server_error'}
     except Exception as e:
-        print(f"Unexpected error: {e}")
+        logger.error('[handle_elevate_profile] unexpected error: %s', e, exc_info=True)
 
     return {}
 
