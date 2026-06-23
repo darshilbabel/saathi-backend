@@ -63,7 +63,7 @@ class AsyncBaseConsumer(AsyncWebsocketConsumer):
 
         profile = Profile.objects.filter(id=profile_id).first()
         try:
-            if profile:
+            if profile and profile.company:
                 company_bot = CompanyBot.objects.get(company=profile.company, route=route)
             else:
                 company_bot = CompanyBot.objects.get(route=route)
