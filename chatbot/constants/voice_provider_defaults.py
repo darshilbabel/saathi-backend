@@ -16,7 +16,8 @@ VOICE_PROVIDER_DEFAULTS = {
         VoiceType.Transliterate: {},
         VoiceType.TextToSpeech: {
             "serviceId": "Bhashini/IITM/TTS",
-            "samplingRate": 22050
+            "samplingRate": 22050,
+            "tts_byte_limit": 4800
         }
     },
 
@@ -36,6 +37,9 @@ VOICE_PROVIDER_DEFAULTS = {
         VoiceType.TextToText: {
             "glossary_id": None,
             "location": "global"
+        },
+        VoiceType.TextToSpeech: {
+            "tts_byte_limit": 4800
         }
     },
 
@@ -67,7 +71,8 @@ VOICE_PROVIDER_DEFAULTS = {
             "speech_sample_rate": 24000,
             "output_audio_codec": "wav",
             "pace": 1.0,
-            "temperature": 0.6
+            "temperature": 0.6,
+            "tts_byte_limit": 4800
         },
 
         VoiceType.Transliterate: {

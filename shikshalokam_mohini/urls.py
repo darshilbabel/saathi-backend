@@ -33,6 +33,7 @@ urlpatterns = [
     path('api/shikshalokam/', include('shikshalokam.urls')),
     re_path(r'^api/storage/upload-local/(?P<object_key>.+)$', aws_views.upload_media_local, name='upload_media_local'),
     path("", include("chatbot.urls", namespace="chatbot")),
+    path('log-viewer/', include('log_viewer.urls')),
 ]
 
 # Serve media files in development
