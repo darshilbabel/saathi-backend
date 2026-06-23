@@ -125,7 +125,8 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 
     ## extra middlwares
-    'chatbot.middlewares.VerifyAuthToken'
+    'chatbot.middlewares.VerifyAuthToken',
+    'shikshalokam_mohini.middleware.StaffRequiredForLogViewer',
 ]
 
 if DEBUG:

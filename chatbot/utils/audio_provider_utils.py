@@ -109,7 +109,8 @@ def _get_tts_byte_limit(voice_provider) -> int:
             return 4800
         defaults = get_provider_defaults(voice_provider.provider, VoiceType.TextToSpeech)
         merged = {**defaults, **(voice_provider.other_params or {})}
-        return int(merged.get('tts_byte_limit', 4800))
+        limit = int(merged.get('tts_byte_limit', 4800))
+        return limit if limit > 0 else 4800
     except Exception as e:
         logger.error("Failed to read tts_byte_limit, using default 4800: %s", e)
         return 4800
@@ -121,6 +122,22 @@ def _split_on_words(text: str, byte_limit: int) -> list:
         words = text.split()
         chunks, current = [], ""
         for word in words:
+            if len(word.encode('utf-8')) > byte_limit:
+                if current:
+                    chunks.append(current)
+                    current = ""
+                part = ""
+                for ch in word:
+                    candidate = f"{part}{ch}"
+                    if len(candidate.encode('utf-8')) <= byte_limit:
+                        part = candidate
+                    else:
+                        if part:
+                            chunks.append(part)
+                        part = ch
+                if part:
+                    chunks.append(part)
+                continue
             candidate = f"{current} {word}".strip() if current else word
             if len(candidate.encode('utf-8')) <= byte_limit:
                 current = candidate
@@ -203,8 +220,7 @@ def _merge_audio_base64(chunks_b64: list, audio_format: str) -> str:
         return base64.b64encode(b''.join(raw_chunks)).decode('utf-8')
     except Exception as e:
         logger.error("TTS audio merge failed: %s", e)
-        # Return the first chunk rather than failing the entire request
-        return chunks_b64[0]
+        raise ValueError("Failed to merge TTS audio chunks") from e
 
 
 def _call_single_tts(text: str, source_language: str, voice_provider) -> dict:
@@ -255,15 +271,21 @@ def text_speech_provider(company_bot, text, source_language):
         if response['status'] != 200:
             logger.error("TTS chunk %d/%d failed: %s", i + 1, len(chunks), response['content'])
             return response
-        chunk_bytes = base64.b64decode(response['content'])
+        try:
+            chunk_bytes = base64.b64decode(response['content'], validate=True)
+        except Exception as e:
+            logger.error("TTS chunk %d/%d returned invalid base64: %s", i + 1, len(chunks), e)
+            return {'status': 500, 'content': "Invalid audio payload from TTS provider"}
         if audio_format is None:
             audio_format = _detect_audio_format(chunk_bytes)
         audio_parts.append(response['content'])
 
-    return {
-        'status': 200,
-        'content': _merge_audio_base64(audio_parts, audio_format)
-    }
+    try:
+        merged_audio = _merge_audio_base64(audio_parts, audio_format)
+    except ValueError:
+        return {'status': 500, 'content': "Failed to merge audio chunks"}
+
+    return {'status': 200, 'content': merged_audio}
 
 
 def speech_text_provider(company_bot, base64, audio_format, source_language):

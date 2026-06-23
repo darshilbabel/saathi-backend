@@ -153,7 +153,10 @@
       var url_json = "{% url 'log_viewer:log_json_view' '' %}";
       loadDataTableFiles('table#log-files-list', url_json);
       var params = new URLSearchParams(window.location.search);
-      loadDataTableTrigger(params.get("file"));
+      var initialFile = params.get("file");
+      if (initialFile) {
+        loadDataTableTrigger(url_json + initialFile);
+      }
     });
 
     $(document).on('click', '.btn-load-json-log', function() {
