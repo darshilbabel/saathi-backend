@@ -272,7 +272,7 @@ def text_speech_provider(company_bot, text, source_language):
             logger.error("TTS chunk %d/%d failed: %s", i + 1, len(chunks), response['content'])
             return response
         try:
-            chunk_bytes = base64.b64decode(response['content'], validate=True)
+            chunk_bytes = base64.b64decode(response['content'].replace("\n", "").replace(" ", ""), validate=True)
         except Exception as e:
             logger.error("TTS chunk %d/%d returned invalid base64: %s", i + 1, len(chunks), e)
             return {'status': 500, 'content': "Invalid audio payload from TTS provider"}
