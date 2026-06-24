@@ -73,5 +73,16 @@ class Profile(models.Model):
         indexes = [
             models.Index(fields=['email']),
             models.Index(fields=['phone']),
-            models.Index(fields=['userid']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['userid'],
+                condition=models.Q(userid__isnull=False),
+                name='uniq_profile_userid',
+            ),
+            models.UniqueConstraint(
+                fields=['email', 'company_id'],
+                condition=models.Q(userid__isnull=True, email__isnull=False),
+                name='uniq_profile_email_company',
+            ),
         ]

@@ -49,7 +49,6 @@ class AsyncSocketConsumer(AsyncBaseConsumer):
             company_chat_status = None
             if message_type == 'authenticate':
                 self.session_id = text_data_json.get('sessionid')
-                # fallback for non-Elevate flows
                 self.profile_id = text_data_json.get('profileid')
                 self.route = text_data_json.get('route')
                 self.bot_route = text_data_json.get('bot_route')
