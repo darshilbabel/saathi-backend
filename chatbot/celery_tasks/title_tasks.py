@@ -73,10 +73,13 @@ def generate_session_title(session_id, language='en'):
         tool_choice = 'auto'
 
     system_msg = {'role': 'system', 'content': company_bot.context}
+    custom_model = (company_bot.other_params or {}).get('custom_model')
+    effective_model = custom_model.strip() if isinstance(custom_model, str) and custom_model.strip() else company_bot.llm_model
+
     response = call_llm_gateway(
         messages=[system_msg] + list(messages),
         provider=company_bot.provider,
-        model=company_bot.llm_model,
+        model=effective_model,
         params=build_gateway_params(company_bot),
         tools=tools or None,
         tool_choice=tool_choice,
