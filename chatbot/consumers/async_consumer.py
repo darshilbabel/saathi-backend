@@ -8,7 +8,8 @@ from chatbot.models import ChatStatus, ChatSession, Profile, CompanyBot, Voice, 
 from chatbot.celery_tasks.flow_tasks import get_flow_response
 from chatbot.models.company_models import CompanyStateMachine
 from chatbot.utils.audio_provider_utils import text_translate_provider
-from chatbot.utils.elevate.profile_utils import handle_elevate_profile
+from asgiref.sync import sync_to_async
+from chatbot.utils.elevate.profile_utils import fetch_elevate_user, upsert_elevate_profile
 import logging
 from channels.db import database_sync_to_async
 from chatbot.utils.transliterate_utils import transliterate_text
@@ -58,7 +59,8 @@ class AsyncSocketConsumer(AsyncBaseConsumer):
 
                 user_id = await self.handle_access_token(self.access_token)
 
-                elevate_result = await self.sync_elevate_profile(self.access_token)
+                elevate_user_data = await sync_to_async(fetch_elevate_user, thread_sensitive=False)(self.access_token)
+                elevate_result = await self.upsert_elevate_profile(elevate_user_data)
                 if elevate_result.get('error') == 'unauthorized':
                     logger.error('[authenticate] Elevate auth failure — closing connection')
                     await self.send(text_data=json.dumps({"msg": "Authentication failed. Invalid or expired token.", "source": "system", "error": True}))
@@ -69,9 +71,15 @@ class AsyncSocketConsumer(AsyncBaseConsumer):
                     await self.send(text_data=json.dumps({"msg": "Service unavailable. Please try again later.", "source": "system", "error": True}))
                     await self.close()
                     return
-                if elevate_result.get('profileid'):
-                    self.profile_id = elevate_result['profileid']
-                    self.ums_profile = elevate_result.get('ums_profile')
+                if not elevate_result.get('profileid'):
+                    logger.error('[authenticate] Elevate returned no profileid — closing connection')
+                    await self.send(text_data=json.dumps(
+                        {"msg": "Authentication failed. Please try again.", "source": "system", "error": True}
+                    ))
+                    await self.close()
+                    return
+                self.profile_id = elevate_result['profileid']
+                self.ums_profile = elevate_result.get('ums_profile')
 
                 profile = await self.get_profile(self.profile_id)
                 logger.info(
@@ -205,8 +213,8 @@ class AsyncSocketConsumer(AsyncBaseConsumer):
         return user_id
 
     @database_sync_to_async
-    def sync_elevate_profile(self, access_token):
-        return handle_elevate_profile(access_token)
+    def upsert_elevate_profile(self, user_data):
+        return upsert_elevate_profile(user_data)
 
     @database_sync_to_async
     def get_company_bot(self, profile, route):

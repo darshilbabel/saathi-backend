@@ -14,25 +14,24 @@ def _safe_body(response):
         return '<unreadable>'
 
 
-def handle_elevate_profile(access_token):
+def fetch_elevate_user(access_token):
+    """HTTP-only fetch from Elevate. No DB access."""
     try:
         if not elevate_base_url:
-            logger.error('[handle_elevate_profile] ELEVATE_BASE_URL is not configured')
+            logger.error('[fetch_elevate_user] ELEVATE_BASE_URL is not configured')
             return {'error': 'elevate_server_error', 'status_code': 502}
 
         url = f"{elevate_base_url}/user/v1/user/read"
-        headers = {
-            'X-auth-token': access_token
-        }
+        headers = {'X-auth-token': access_token}
         response = requests.get(url=url, headers=headers, timeout=30)
-        logger.info('[handle_elevate_profile] status=%s', response.status_code)
+        logger.info('[fetch_elevate_user] status=%s', response.status_code)
 
         if response.status_code == 401:
-            logger.error('[handle_elevate_profile] unauthorized — token invalid or expired body=%s', _safe_body(response))
+            logger.error('[fetch_elevate_user] unauthorized — token invalid or expired body=%s', _safe_body(response))
             return {'error': 'unauthorized', 'status_code': 401}
 
         if response.status_code >= 500:
-            logger.error('[handle_elevate_profile] Elevate server error status=%s body=%s', response.status_code, _safe_body(response))
+            logger.error('[fetch_elevate_user] Elevate server error status=%s body=%s', response.status_code, _safe_body(response))
             return {'error': 'elevate_server_error', 'status_code': response.status_code}
 
         response.raise_for_status()
@@ -40,14 +39,14 @@ def handle_elevate_profile(access_token):
         json_data = response.json()
 
         if json_data.get('responseCode', '').lower() != 'ok':
-            logger.error('[handle_elevate_profile] unexpected responseCode=%s', json_data.get('responseCode'))
+            logger.error('[fetch_elevate_user] unexpected responseCode=%s', json_data.get('responseCode'))
             return {}
 
         user_data = json_data.get('result', {})
         userid = user_data.get('id')
 
         if not userid:
-            logger.error('[handle_elevate_profile] no userid in Elevate response')
+            logger.error('[fetch_elevate_user] no userid in Elevate response')
             return {}
 
         language = user_data.get('preferred_language')
@@ -70,37 +69,60 @@ def handle_elevate_profile(access_token):
         state = user_data.get('profileState') or {}
         district = user_data.get('userDistrict') or {}
 
-        profile, created = Profile.objects.update_or_create(
-            userid=userid,
-            defaults={'source': 'elevate'}
-        )
-        logger.info('[handle_elevate_profile] profile %s userid=%s', 'created' if created else 'updated', userid)
-
         return {
-            "profileid": profile.id,
-            "has_accepted_tnc": (profile.other_params or {}).get('is_tnc_accepted', False),
-            "route": language,
-            "reroute_url": os.getenv('SSO_REROUTE_URL'),
-            "ums_profile": {
-                "designation": designation_value,
-                "org_associated": school_name,
-                "district": district.get('label'),
-                "state": state.get('label'),
-                "preferred_route": language,
-            }
+            'userid': userid,
+            'language': language,
+            'designation': designation_value,
+            'school_name': school_name,
+            'district': district.get('label'),
+            'state': state.get('label'),
         }
 
     except requests.exceptions.HTTPError as e:
         upstream_status = e.response.status_code if e.response is not None else None
-        logger.error('[handle_elevate_profile] HTTP error status=%s body=%s', upstream_status, _safe_body(e.response) if e.response is not None else '')
+        logger.error('[fetch_elevate_user] HTTP error status=%s body=%s', upstream_status, _safe_body(e.response) if e.response is not None else '')
         return {'error': 'elevate_server_error', 'status_code': upstream_status}
     except requests.exceptions.RequestException as e:
-        logger.error('[handle_elevate_profile] request failed: %s', e, exc_info=True)
+        logger.error('[fetch_elevate_user] request failed: %s', e, exc_info=True)
         return {'error': 'elevate_server_error'}
     except Exception as e:
-        logger.error('[handle_elevate_profile] unexpected error: %s', e, exc_info=True)
+        logger.error('[fetch_elevate_user] unexpected error: %s', e, exc_info=True)
 
     return {}
+
+
+def upsert_elevate_profile(user_data):
+    """DB-only upsert. Expects the dict returned by fetch_elevate_user."""
+    if not user_data or user_data.get('error') or not user_data.get('userid'):
+        return user_data or {}
+
+    userid = user_data['userid']
+    language = user_data['language']
+
+    profile, created = Profile.objects.update_or_create(
+        userid=userid,
+        defaults={'source': 'elevate'}
+    )
+    logger.info('[upsert_elevate_profile] profile %s userid=%s', 'created' if created else 'updated', userid)
+
+    return {
+        "profileid": profile.id,
+        "has_accepted_tnc": (profile.other_params or {}).get('is_tnc_accepted', False),
+        "route": language,
+        "reroute_url": os.getenv('SSO_REROUTE_URL'),
+        "ums_profile": {
+            "designation": user_data['designation'],
+            "org_associated": user_data['school_name'],
+            "district": user_data['district'],
+            "state": user_data['state'],
+            "preferred_route": language,
+        }
+    }
+
+
+def handle_elevate_profile(access_token):
+    user_data = fetch_elevate_user(access_token)
+    return upsert_elevate_profile(user_data)
 
 
 def update_elevate_profile(access_token, name=None, role=None, school_name=None, district=None, state=None):

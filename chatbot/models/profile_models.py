@@ -60,6 +60,8 @@ class Profile(models.Model):
                     })
 
     def save(self, *args, **kwargs):
+        if self.userid == '':
+            self.userid = None
         if not self.userid and (not self.company_id or not self.email):
             raise ValueError("Profile must have either a userid (UMS flow) or both company and email (traditional flow).")
         if not self.userid and self.email and self.company_id:
