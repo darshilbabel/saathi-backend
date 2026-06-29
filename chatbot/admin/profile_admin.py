@@ -42,6 +42,7 @@ class ProfileAdmin(ImportMixin, ExportActionMixin, SimpleHistoryAdmin):
     list_filter = (
         CustomAdvanceDateFilter,
         'email',
+        'userid',
         'phone',
         ProfileCompanyFilter,
         'profile_type'
