@@ -11,9 +11,10 @@ class PromptBuilder:
     """Centralized prompt building logic"""
 
     @staticmethod
-    def build_system_prompt(company_bot, state_machine=None, profile=None):
-        address = profile.profile_address.all().first() if profile else None
-        context_data = {"profile": profile, "address": address}
+    def build_system_prompt(company_bot, state_machine=None, profile=None, ums_profile=None):
+        # UMS users have no ProfileAddress rows; state/district/block come from ums_profile dict
+        address = None if ums_profile else (profile.profile_address.all().first() if profile else None)
+        context_data = {"profile": profile, "address": address, "ums_profile": ums_profile}
 
         system_parts = [PromptBuilder._render_template(company_bot.context, context_data)]
 

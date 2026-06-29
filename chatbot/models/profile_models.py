@@ -20,16 +20,16 @@ class Profile(models.Model):
         return upload_path
 
     first_name = models.CharField(max_length=100, null=True, blank=True)
-    userid = models.CharField(max_length=200, null=True, blank=True)
+    userid = models.CharField(max_length=500, null=True, blank=True)
     last_name = models.CharField(max_length=100, null=True, blank=True)
-    email = models.EmailField(max_length=1000, null=False, blank=False)
+    email = models.EmailField(max_length=1000, null=True, blank=True)
     phone = models.CharField(max_length=20, null=True, blank=True)
     alternate_phone = models.CharField(max_length=20, null=True, blank=True)
     country = models.CharField(max_length=100, null=True, blank=True)
     status = models.CharField(max_length=20, choices=EntityStatus.choices, default=EntityStatus.ACTIVE)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    company = models.ForeignKey(Company, on_delete=models.DO_NOTHING, null=False, blank=False)
+    company = models.ForeignKey(Company, on_delete=models.DO_NOTHING, null=True, blank=True)
     password = models.CharField(max_length=1000, null=True, blank=True)
     profile_type = models.CharField(max_length=20, choices=ProfileType.choices, default=ProfileType.USER)
     profile_code = models.CharField(max_length=100, null=True, blank=True)
@@ -60,13 +60,31 @@ class Profile(models.Model):
                     })
 
     def save(self, *args, **kwargs):
+        if self.userid == '':
+            self.userid = None
+        if not self.userid and (not self.company_id or not self.email):
+            raise ValueError("Profile must have either a userid (UMS flow) or both company and email (traditional flow).")
+        if not self.userid and self.email and self.company_id:
+            if Profile.objects.filter(email=self.email, company_id=self.company_id).exclude(pk=self.pk).exists():
+                raise ValueError("A profile with this email and company already exists.")
         if self.password and 'pbkdf2_sha256' not in self.password:
             self.password = make_password(self.password)
         super().save(*args, **kwargs)
 
     class Meta:
-        unique_together = ('email', 'company')
         indexes = [
             models.Index(fields=['email']),
             models.Index(fields=['phone']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['userid'],
+                condition=models.Q(userid__isnull=False),
+                name='uniq_profile_userid',
+            ),
+            models.UniqueConstraint(
+                fields=['email', 'company_id'],
+                condition=models.Q(userid__isnull=True, email__isnull=False),
+                name='uniq_profile_email_company',
+            ),
         ]

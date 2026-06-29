@@ -36,7 +36,10 @@ class AsyncBaseConsumer(AsyncWebsocketConsumer):
             logger.error('Receive Error: %s', e, exc_info=True)
 
         finally:
-            await self.close()
+            try:
+                await self.close()
+            except Exception:
+                pass
 
     async def receive(self, text_data):
         raise NotImplementedError("receive method must be implemented in subclass")
@@ -63,7 +66,7 @@ class AsyncBaseConsumer(AsyncWebsocketConsumer):
 
         profile = Profile.objects.filter(id=profile_id).first()
         try:
-            if profile:
+            if profile and profile.company:
                 company_bot = CompanyBot.objects.get(company=profile.company, route=route)
             else:
                 company_bot = CompanyBot.objects.get(route=route)
