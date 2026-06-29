@@ -219,11 +219,21 @@ def get_profile_view(request):
         is_onboarding_completed = bool(
             profile.other_params and profile.other_params.get('is_onboarding_completed', False)
         )
+        is_profile_complete = is_onboarding_completed
 
         return Response({
             'id': profile.id,
+            'first_name': profile.first_name,
+            'last_name': profile.last_name,
+            'email': profile.email,
+            'phone': profile.phone,
+            'designation': profile.designation,
+            'org_associated': profile.org_associated,
+            'gender': profile.gender,
+            'location': profile.location,
+            'preferred_route': profile.preferred_route,
             'is_tnc_accepted': is_tnc_accepted,
-            'is_profile_complete': is_onboarding_completed,
+            'is_profile_complete': is_profile_complete,
         }, status=200)
 
     except Profile.DoesNotExist:

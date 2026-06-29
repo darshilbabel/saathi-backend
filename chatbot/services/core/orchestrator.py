@@ -1,3 +1,4 @@
+import traceback
 import logging
 from .base_service import BaseChatService
 from .prompt_builder import PromptBuilder
@@ -16,7 +17,7 @@ class ChatOrchestrator:
         self.prompt_builder = PromptBuilder()
         self.message_handler = MessageHandler()
 
-    def process_chat_request(self, channel_name, session_id, profile_id, language, access_token=None, ums_profile=None):
+    def process_chat_request(self, channel_name, session_id, profile_id, language, access_token=None):
         """Main processing method"""
         try:
             # Get session data
@@ -65,7 +66,7 @@ class ChatOrchestrator:
             # Build prompt
             prompt_to_use = self.prompt_builder.build_system_prompt(
                 company_bot=session_data['company_bot'], state_machine=state_machine,
-                profile=session_data['profile'], ums_profile=ums_profile
+                profile=session_data['profile']
             )
 
             # Append running finalized sources so the LLM knows what to update on each turn
@@ -90,7 +91,6 @@ class ChatOrchestrator:
                 'temp_messages': temp_messages,
                 'intro_mssg': intro_mssg,
                 'access_token': access_token,
-                'ums_profile': ums_profile,
             }
 
             # Add strategy-specific parameters
@@ -104,6 +104,7 @@ class ChatOrchestrator:
 
         except Exception as e:
             logger.error('Error in chat processing: %s', e, exc_info=True)
+            traceback.print_exc()
             return None
 
     def _handle_error_response(self, error_msg, channel_name, language, chat_session, company_bot):

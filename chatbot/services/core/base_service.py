@@ -14,7 +14,7 @@ class BaseChatService:
         chat_session = ChatSession.objects.filter(session=session_id).first()
         profile = Profile.objects.filter(id=profile_id).first()
 
-        if profile and profile.company_id:
+        if profile:
             company_bot = CompanyBot.objects.get(company=profile.company, route=bot_route)
         else:
             company_bot = CompanyBot.objects.get(route=bot_route)

@@ -34,10 +34,5 @@ class BotVernacular(models.Model):
         indexes = [
             models.Index(fields=['language']),
             models.Index(fields=['created_at']),
-        ]
-        constraints = [
-            models.UniqueConstraint(
-                fields=['company_bot', 'language'],
-                name='uniq_bot_vernacular_bot_language',
-            ),
+            models.Index(fields=['company_bot']),
         ]
