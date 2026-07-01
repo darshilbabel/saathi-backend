@@ -1,4 +1,6 @@
+import asyncio
 import json
+import os
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.db.models import Max
@@ -11,10 +13,35 @@ logger = logging.getLogger('django')
 
 
 class AsyncBaseConsumer(AsyncWebsocketConsumer):
+    IDLE_TIMEOUT_SECONDS = int(os.getenv('WEBSOCKET_IDLE_TIMEOUT', '60'))
+    IDLE_POLL_INTERVAL = int(os.getenv('WEBSOCKET_IDLE_POLL_INTERVAL', '10'))
+
     async def connect(self):
         await self.accept()
+        self.last_activity = asyncio.get_running_loop().time()
+        self._idle_task = asyncio.create_task(self._idle_timeout_monitor())
+
+    async def _idle_timeout_monitor(self):
+        try:
+            while True:
+                await asyncio.sleep(self.IDLE_POLL_INTERVAL)
+                idle_seconds = asyncio.get_running_loop().time() - self.last_activity
+                if idle_seconds >= self.IDLE_TIMEOUT_SECONDS:
+                    logger.info('Idle timeout on channel %s after %.1fs', self.channel_name, idle_seconds)
+                    await self.send(text_data=json.dumps({
+                        "msg": "Connection closed due to inactivity.",
+                        "source": "system",
+                        "error": False,
+                        "event": "idle_timeout"
+                    }))
+                    await self.close()
+                    return
+        except asyncio.CancelledError:
+            pass
 
     async def disconnect(self, code):
+        if hasattr(self, '_idle_task') and self._idle_task:
+            self._idle_task.cancel()
         try:
             if hasattr(self, 'session_id') and self.session_id:
                 session_id = self.session_id
@@ -45,6 +72,7 @@ class AsyncBaseConsumer(AsyncWebsocketConsumer):
         raise NotImplementedError("receive method must be implemented in subclass")
 
     async def chat_message(self, event):
+        self.last_activity = asyncio.get_running_loop().time()
         text = event["text"]
         await self.send(text_data=json.dumps({"text": text}))
 
