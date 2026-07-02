@@ -32,45 +32,18 @@ def save_in_company_db(
         sender = Profile.objects.filter(id=profile_id).first()
         receiver = Profile.objects.get(id=1)
 
-    last_chat = CompanyChat.objects.filter(session=session_id).order_by('-created_at').first()
-    print(last_chat)
-
-    # if audio_base64:
-    #     audio_file = base64_to_audio_file(base64_string=audio_base64, session_id=session_id)
-    # else:
-    #     audio_file=None
-
-    if last_chat and last_chat.sender == sender:
-        if append_to_last:
-            last_chat.message = (last_chat.message or '') + '\n\n' + message
-        else:
-            last_chat.message = message
-        last_chat.translated_message = translated_message
-        last_chat.chunks = _safe_json_dumps(chunks)
-        last_chat.status = status
-        if audio_base64:
-            if last_chat.file_url:
-                last_chat.file_url = f"{last_chat.file_url},{audio_base64}"
-            else:
-                last_chat.file_url = audio_base64
-        
-        last_chat.stage = stage
-        last_chat.other_params = other_params
-        last_chat.save()
-    else:
-        company_chat = CompanyChat(
-            message=message,
-            translated_message=translated_message,
-            chunks=_safe_json_dumps(chunks),
-            sender=sender,
-            receiver=receiver,
-            session=session_id,
-            status=status,
-            file_url=audio_base64,
-            stage=stage,
-            other_params=other_params
-        )
-        company_chat.save()
+    CompanyChat.objects.create(
+        message=message,
+        translated_message=translated_message,
+        chunks=_safe_json_dumps(chunks),
+        sender=sender,
+        receiver=receiver,
+        session=session_id,
+        status=status,
+        file_url=audio_base64,
+        stage=stage,
+        other_params=other_params
+    )
 
 
 @shared_task

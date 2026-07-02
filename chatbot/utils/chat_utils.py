@@ -1,6 +1,20 @@
 from chatbot.models import Profile, LLMProvider, CompanyChat
 import json
 
+
+def _merge_consecutive_roles(messages):
+    """Merge consecutive same-role entries into one (required by LLMs that forbid back-to-back same-role turns)."""
+    merged = []
+    for msg in messages:
+        if not merged or msg.get('role') != merged[-1].get('role'):
+            merged.append(dict(msg))
+        else:
+            prev = merged[-1].get('content') or ''
+            new = msg.get('content') or ''
+            merged[-1]['content'] = prev + '\n\n' + new
+    return merged
+
+
 def format_message_as_per_openai_format(chats, intro=None):
     ai_user = Profile.objects.values("id").get(id=1)
     if intro:
@@ -63,7 +77,7 @@ def format_message_as_per_openai_format(chats, intro=None):
                 'role': 'assistant',
                 'content': content
             })
-    return messages
+    return _merge_consecutive_roles(messages)
 
 
 def format_message_as_per_bedrock_format(chats, intro=None, other_info=None):
