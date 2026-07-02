@@ -1,4 +1,5 @@
 import django_filters
+from django.db.models import Subquery, OuterRef
 from rest_framework import generics
 from rest_framework.filters import OrderingFilter
 from rest_framework.response import Response
@@ -63,6 +64,17 @@ class ProfileRetrieveUpdateDestroyView(generics.RetrieveUpdateAPIView):
     serializer_class = ProfileSerializer
 
 
+def _annotate_first_user_message(qs):
+    first_msg_sq = (
+        CompanyChat.objects
+        .filter(session=OuterRef('session'))
+        .exclude(sender_id=1)
+        .order_by('created_at')
+        .values('message')[:1]
+    )
+    return qs.annotate(first_user_message=Subquery(first_msg_sq))
+
+
 class ChatSessionListCreateView(generics.ListCreateAPIView):
     queryset = ChatSession.objects.all()
     serializer_class = ChatSessionSerializer
@@ -71,6 +83,9 @@ class ChatSessionListCreateView(generics.ListCreateAPIView):
     ordering_fields = ['updated_at', 'created_at', 'id']
     ordering = ['-updated_at']
 
+    def get_queryset(self):
+        return _annotate_first_user_message(super().get_queryset())
+
 
 class ChatSessionRetrieveUpdateDestroyView(generics.RetrieveUpdateAPIView):
     queryset = ChatSession.objects.all()
@@ -78,11 +93,17 @@ class ChatSessionRetrieveUpdateDestroyView(generics.RetrieveUpdateAPIView):
     filter_backends = [django_filters.rest_framework.DjangoFilterBackend]
     filterset_fields = ['session']
 
+    def get_queryset(self):
+        return _annotate_first_user_message(super().get_queryset())
+
 
 class ChatSessionRetrieveUpdateDestroyViewSession(generics.RetrieveUpdateAPIView):
     queryset = ChatSession.objects.all()
     serializer_class = ChatSessionSerializer
     lookup_field = 'session'
+
+    def get_queryset(self):
+        return _annotate_first_user_message(super().get_queryset())
 
 
 class FlowImageConfigView(generics.GenericAPIView):
