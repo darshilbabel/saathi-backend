@@ -624,15 +624,12 @@ class BaseResponseHandler(ABC):
             citation_chunks = self._extract_citation_chunks(message)
             all_chunks = list(retrieved_chunks or []) + citation_chunks
 
-            if content:
-                save_in_company_db(
-                    session_id=session_id, profile_id=profile_id, initiated_by='AI',
-                    message=content, chunks=all_chunks, status=ChatStatus.IN_PROGRESS, stage=None,
-                    append_to_last=append_to_last,
-                    other_params={'usage': usage_cost} if usage_cost else None,
-                )
+            # No save here: content still flows to _handle_regular_response, which does the canonical save.
             sources = self._prepare_sources(all_chunks)
             extra = {'sources': sources} if sources else None
+            if all_chunks:
+                extra = extra or {}
+                extra['_retrieved_chunks'] = all_chunks
             return content, extra, finish_reason
 
         except Exception as e:
