@@ -67,6 +67,8 @@ def call_llm_gateway(
     if tool_choice is not None:
         payload['tool_choice'] = tool_choice
 
+    logger.info('LLM gateway request payload: %s', payload)
+
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=120)
         response.raise_for_status()
@@ -121,6 +123,8 @@ def call_llm_gateway_stream(
         payload['cache_policy'] = cache_policy
     if metadata is not None:
         payload['metadata'] = metadata
+
+    logger.info('LLM gateway stream request payload: %s', payload)
 
     try:
         with requests.post(url, headers=headers, json=payload, stream=True, timeout=120) as response:
