@@ -76,6 +76,7 @@ def fetch_elevate_user(access_token):
             'school_name': school_name,
             'district': district.get('label'),
             'state': state.get('label'),
+            'has_accepted_tnc': bool(user_data.get('has_accepted_terms_and_conditions', False)),
         }
 
     except requests.exceptions.HTTPError as e:
@@ -107,7 +108,7 @@ def upsert_elevate_profile(user_data):
 
     return {
         "profileid": profile.id,
-        "has_accepted_tnc": (profile.other_params or {}).get('is_tnc_accepted', False),
+        "has_accepted_tnc": user_data.get('has_accepted_tnc', False),
         "route": language,
         "reroute_url": os.getenv('SSO_REROUTE_URL'),
         "ums_profile": {
@@ -125,7 +126,8 @@ def handle_elevate_profile(access_token):
     return upsert_elevate_profile(user_data)
 
 
-def update_elevate_profile(access_token, name=None, role=None, school_name=None, district=None, state=None):
+def update_elevate_profile(access_token, name=None, role=None, school_name=None, district=None, state=None,
+                            has_accepted_terms_and_conditions=None):
     try:
         url = f"{elevate_base_url}/user/v1/user/update"
         headers = {'X-auth-token': access_token}
@@ -140,6 +142,8 @@ def update_elevate_profile(access_token, name=None, role=None, school_name=None,
             body['userDistrict'] = district
         if state:
             body['profileState'] = state
+        if has_accepted_terms_and_conditions is not None:
+            body['has_accepted_terms_and_conditions'] = has_accepted_terms_and_conditions
 
         logger.info(f'[update_elevate_profile] sending body={body}')
         response = requests.patch(url, headers=headers, json=body, timeout=30)

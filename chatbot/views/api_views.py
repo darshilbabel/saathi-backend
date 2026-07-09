@@ -1,4 +1,5 @@
 import logging
+import os
 import traceback
 from django.contrib.auth.hashers import check_password
 from rest_framework.response import Response
@@ -9,6 +10,7 @@ from chatbot.models.auth_models import BlacklistedToken
 from chatbot.models.company_models import Company, CompanyBot
 from chatbot.models.profile_models import Profile
 from chatbot.serializer.profile_serializer import ProfileSerializer
+from chatbot.utils.elevate.profile_utils import fetch_elevate_user, update_elevate_profile
 from django.http import JsonResponse
 from django.contrib.sessions.backends.db import SessionStore
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -16,6 +18,14 @@ from chatbot.translate.ai4Bharat.transliterate import call_ai4bharat_translitera
 from chatbot.models.company_models import Flow
 
 logger = logging.getLogger('django')
+ACCESS_TOKEN_COOKIE_KEY = os.getenv('ACCESS_TOKEN_COOKIE_KEY')
+
+
+def _get_access_token(request):
+    access_token = request.COOKIES.get(ACCESS_TOKEN_COOKIE_KEY) if ACCESS_TOKEN_COOKIE_KEY else None
+    if not access_token:
+        access_token = request.headers.get('X-auth-token')
+    return access_token
 
 
 def generate_session_id(request):
@@ -212,9 +222,19 @@ def get_profile_view(request):
                     }, status=404)
             profile = Profile.objects.get(email=email, company=company)
 
-        is_tnc_accepted = bool(
-            profile.other_params and profile.other_params.get('is_tnc_accepted', False)
-        )
+        access_token = _get_access_token(request)
+        is_tnc_accepted = False
+        if access_token:
+            elevate_user_data = fetch_elevate_user(access_token)
+            if elevate_user_data.get('error'):
+                logger.error(
+                    '[get_profile_view] failed to fetch tnc status from Elevate: %s',
+                    elevate_user_data.get('error')
+                )
+            else:
+                is_tnc_accepted = elevate_user_data.get('has_accepted_tnc', False)
+        else:
+            logger.error('[get_profile_view] no access_token available — defaulting is_tnc_accepted to False')
 
         is_onboarding_completed = bool(
             profile.other_params and profile.other_params.get('is_onboarding_completed', False)
@@ -272,10 +292,15 @@ def accept_tnc_view(request):
                         'message': 'No company found'
                     }, status=404)
             profile = Profile.objects.get(email=email, company=company)
-        other_params = profile.other_params or {}
-        other_params['is_tnc_accepted'] = True
-        profile.other_params = other_params
-        profile.save(update_fields=['other_params', 'updated_at'])
+
+        access_token = _get_access_token(request)
+        if not access_token:
+            return Response({
+                'status': 'error',
+                'message': 'access_token is required to accept terms and conditions'
+            }, status=400)
+
+        update_elevate_profile(access_token, has_accepted_terms_and_conditions=True)
 
         return Response({
             'status': 'ok',
