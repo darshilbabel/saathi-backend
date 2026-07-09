@@ -25,6 +25,8 @@ def build_gateway_params(company_bot) -> dict:
         params['stop'] = other['stop']
     if other.get('seed') is not None:
         params['seed'] = other['seed']
+    if other.get('provider_options') is not None:
+        params['provider_options'] = other['provider_options']
     if getattr(company_bot, 'enable_web_search', False):
         params['web_search_options'] = {
             'search_context_size': company_bot.web_search_context_size or 'medium'
@@ -46,12 +48,18 @@ def call_llm_gateway(
         'Content-Type': 'application/json',
     }
 
+    params = dict(params or {})
+    provider_options = params.pop('provider_options', None)
+
     payload = {
         'provider': provider,
         'model': model,
         'messages': messages,
-        'params': params or {},
+        'params': params,
     }
+
+    if provider_options is not None:
+        payload['provider_options'] = provider_options
 
     if tools is not None:
         payload['tools'] = tools
@@ -92,12 +100,18 @@ def call_llm_gateway_stream(
         'Accept': 'text/event-stream',
     }
 
+    params = dict(params or {})
+    provider_options = params.pop('provider_options', None)
+
     payload = {
         'provider': provider,
         'model': model,
         'messages': messages,
-        'params': params or {},
+        'params': params,
     }
+
+    if provider_options is not None:
+        payload['provider_options'] = provider_options
 
     if tools is not None:
         payload['tools'] = tools

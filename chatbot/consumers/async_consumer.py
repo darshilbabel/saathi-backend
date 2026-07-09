@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 from django.conf import settings
@@ -43,6 +44,7 @@ class AsyncSocketConsumer(AsyncBaseConsumer):
             await super().disconnect(code)
 
     async def receive(self, text_data):
+        self.last_activity = asyncio.get_running_loop().time()
         try:
             logger.info(f"Received text data via common websocket: {text_data}")
             text_data_json = json.loads(text_data)
@@ -63,18 +65,32 @@ class AsyncSocketConsumer(AsyncBaseConsumer):
                 elevate_result = await self.upsert_elevate_profile(elevate_user_data)
                 if elevate_result.get('error') == 'unauthorized':
                     logger.error('[authenticate] Elevate auth failure — closing connection')
-                    await self.send(text_data=json.dumps({"msg": "Authentication failed. Invalid or expired token.", "source": "system", "error": True}))
+                    await self.send(text_data=json.dumps({
+                        "msg": "Authentication failed. Invalid or expired token.", 
+                        "source": "system", 
+                        "error": True, 
+                        "event": "auth_error"
+                    }))
                     await self.close()
                     return
                 if elevate_result.get('error') == 'elevate_server_error':
                     logger.error('[authenticate] Elevate server error — closing connection')
-                    await self.send(text_data=json.dumps({"msg": "Service unavailable. Please try again later.", "source": "system", "error": True}))
+                    await self.send(text_data=json.dumps({
+                        "msg": "Service unavailable. Please try again later.", 
+                        "source": "system", 
+                        "error": True, 
+                        "event": "service_error"
+                    }))
                     await self.close()
                     return
                 if not elevate_result.get('profileid'):
                     logger.error('[authenticate] Elevate returned no profileid — closing connection')
                     await self.send(text_data=json.dumps(
-                        {"msg": "Authentication failed. Please try again.", "source": "system", "error": True}
+                        {"msg": "Authentication failed. Please try again.", 
+                         "source": "system", 
+                         "error": True, 
+                         "event": "auth_error"
+                         }
                     ))
                     await self.close()
                     return
@@ -111,7 +127,8 @@ class AsyncSocketConsumer(AsyncBaseConsumer):
                             "text": {
                                 "msg": error_msg,
                                 "source": "system",
-                                "error": True
+                                "error": True,
+                                "event": "auth_required"
                             },
                         },
                     )
