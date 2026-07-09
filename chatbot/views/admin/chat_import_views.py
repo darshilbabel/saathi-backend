@@ -2,7 +2,7 @@
 Dev tool: ingest a company-chat export (.xlsx, a raw dump of CompanyChat rows)
 from another instance into this instance's admin panel.
 
-Disabled unless settings.COMPANY_CHAT_IMPORT_TOOL_ENABLED is set (see settings.py).
+Disabled unless the environment variable COMPANY_CHAT_IMPORT_TOOL_ENABLED=True is set (see chat_import_tool_enabled()).
 """
 import ast
 import logging

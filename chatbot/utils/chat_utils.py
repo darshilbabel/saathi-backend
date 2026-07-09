@@ -11,7 +11,10 @@ def _merge_consecutive_roles(messages):
         else:
             prev = merged[-1].get('content') or ''
             new = msg.get('content') or ''
-            merged[-1]['content'] = prev + '\n\n' + new
+            if prev and new:
+                merged[-1]['content'] = prev + '\n\n' + new
+            else:
+                merged[-1]['content'] = prev or new
     return merged
 
 
