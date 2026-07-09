@@ -1,0 +1,178 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block title %}Import Company Chats{% endblock %}
+
+{% block extrastyle %}
+{{ block.super }}
+<style>
+    .chat-import-card .card-body select.form-control,
+    .chat-import-card .card-body input.form-control {
+        max-width: 480px;
+    }
+    .chat-import-card code {
+        background-color: rgba(0, 0, 0, 0.06);
+        padding: 1px 5px;
+        border-radius: 4px;
+    }
+    .chat-import-card .table td,
+    .chat-import-card .table th {
+        vertical-align: middle;
+    }
+    .chat-import-card .badge {
+        font-size: 85%;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="chat-import-card">
+    <div class="card card-primary card-outline">
+        <div class="card-header">
+            <h3 class="card-title">
+                <i class="fas fa-file-import mr-1"></i> Import Company Chats
+            </h3>
+        </div>
+        <div class="card-body">
+            <div class="alert alert-warning">
+                <i class="icon fas fa-exclamation-triangle"></i>
+                Dev tool: ingest a company-chat export (<code>.xlsx</code>) from another instance.
+                Each distinct <code>session</code> value in the file is checked independently &mdash;
+                if that session id already exists locally, it's imported under a freshly generated
+                id instead (never merged into the existing session) and flagged in the results below.
+                This is a one-shot import: re-uploading the same file will create duplicate
+                sessions/messages.
+            </div>
+
+            {% if not import_done %}
+            <form method="post" enctype="multipart/form-data">
+                {% csrf_token %}
+                <div class="form-group">
+                    <label for="id_company">Company</label>
+                    <select name="company" id="id_company" class="form-control" required>
+                        <option value="">---------</option>
+                        {% for company in companies %}
+                        <option value="{{ company.id }}">{{ company.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="id_company_bot">Bot</label>
+                    <select name="company_bot" id="id_company_bot" class="form-control" required>
+                        <option value="">---------</option>
+                        {% for bot in bots %}
+                        <option value="{{ bot.id }}" data-company="{{ bot.company_id }}">
+                            {{ bot.company.name }} &mdash; {{ bot.name }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="id_profile">Profile <span class="text-muted">(optional)</span></label>
+                    <select name="profile" id="id_profile" class="form-control">
+                        <option value="">Auto-create a profile per sender name (default)</option>
+                        {% for profile in profiles %}
+                        <option value="{{ profile.id }}">
+                            {{ profile.company.name|default:"No company" }} &mdash; {{ profile.first_name|default:profile.email|default:profile.userid }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                    <small class="form-text text-muted">
+                        Lists every profile in the system (a profile is valid with just a userid and no
+                        company, or with a company+email). If you pick one here, every human
+                        sender/receiver in the file is attributed to it instead of auto-creating a new
+                        temporary profile per name &mdash; not filtered to the selected company.
+                    </small>
+                </div>
+                <div class="form-group">
+                    <label for="id_import_file">Export file (.xlsx)</label>
+                    <input type="file" name="import_file" id="id_import_file" class="form-control-file"
+                           accept=".xlsx" required>
+                </div>
+                <div class="card-footer px-0 pb-0 d-flex justify-content-end">
+                    <a href="{% url 'admin:chatbot_chatsession_changelist' %}" class="btn btn-outline-secondary mr-2">
+                        Cancel
+                    </a>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-upload mr-1"></i> Import
+                    </button>
+                </div>
+            </form>
+            {% else %}
+            <h5 class="mb-3">Results</h5>
+            <div class="table-responsive">
+                <table class="table table-bordered table-striped">
+                    <thead class="thead-light">
+                        <tr>
+                            <th>Original session id</th>
+                            <th>Status</th>
+                            <th>Imported as</th>
+                            <th>Messages</th>
+                            <th>Profiles created</th>
+                            <th>Detail</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for result in session_results %}
+                        <tr>
+                            <td><code>{{ result.file_session_id }}</code></td>
+                            <td>
+                                {% if result.status == 'created' %}
+                                <span class="badge badge-success">created</span>
+                                {% elif result.status == 'collision' %}
+                                <span class="badge badge-warning">id already existed</span>
+                                {% elif result.status == 'skipped' %}
+                                <span class="badge badge-secondary">skipped</span>
+                                {% else %}
+                                <span class="badge badge-danger">error</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ result.target_session_id|default:"-" }}</td>
+                            <td>{{ result.message_count }}</td>
+                            <td>{{ result.profiles_created|default:"-" }}</td>
+                            <td class="text-muted">{{ result.detail|default:"" }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <div class="card-footer px-0 pb-0 d-flex justify-content-end">
+                <a href="{% url 'admin:chatbot_chatsession_import_company_chats' %}" class="btn btn-outline-secondary mr-2">
+                    <i class="fas fa-redo mr-1"></i> Import another file
+                </a>
+                <a href="{% url 'admin:chatbot_chatsession_changelist' %}" class="btn btn-primary">
+                    Back to Chat Sessions
+                </a>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<script>
+// Purely cosmetic: narrow the bot dropdown to the selected company's bots.
+// The profile dropdown intentionally lists every profile, unfiltered.
+document.addEventListener('DOMContentLoaded', function () {
+    var companySelect = document.getElementById('id_company');
+    if (!companySelect) return;
+
+    [document.getElementById('id_company_bot')].forEach(function (select) {
+        if (!select) return;
+        var allOptions = Array.prototype.slice.call(select.options);
+
+        function filterOptions() {
+            var companyId = companySelect.value;
+            select.innerHTML = '';
+            allOptions.forEach(function (opt) {
+                if (!opt.value || !companyId || opt.dataset.company === companyId) {
+                    select.appendChild(opt.cloneNode(true));
+                }
+            });
+        }
+
+        companySelect.addEventListener('change', filterOptions);
+        filterOptions();
+    });
+});
+</script>
+{% endblock %}

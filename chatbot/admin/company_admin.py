@@ -375,6 +375,33 @@ class ChatSessionAdmin(ExportAllFieldsMixin, admin.ModelAdmin):
 
     resource_class = ChatSessionResource
 
+    def get_urls(self):
+        urls = super().get_urls()
+        from chatbot.views.admin.chat_import_views import chat_import_tool_enabled
+        if not chat_import_tool_enabled():
+            return urls
+        custom_urls = [
+            path(
+                'import-company-chats/',
+                self.admin_site.admin_view(self.import_company_chats_view),
+                name='chatbot_chatsession_import_company_chats',
+            ),
+        ]
+        return custom_urls + urls
+
+    def import_company_chats_view(self, request):
+        from chatbot.views.admin.chat_import_views import CompanyChatImportView
+        return CompanyChatImportView.as_view()(request)
+
+    def changelist_view(self, request, extra_context=None):
+        extra_context = extra_context or {}
+        from chatbot.views.admin.chat_import_views import chat_import_tool_enabled
+        if chat_import_tool_enabled():
+            profile = Profile.objects.filter(email=request.user.email).first()
+            is_moderator = bool(profile and profile.profile_type == ProfileType.MODERATOR)
+            extra_context['show_chat_import_tool'] = request.user.is_superuser or is_moderator
+        return super().changelist_view(request, extra_context=extra_context)
+
     def current_question(self, obj):
         return obj.current_step
 
