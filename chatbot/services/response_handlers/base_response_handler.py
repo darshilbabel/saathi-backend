@@ -527,8 +527,8 @@ class BaseResponseHandler(ABC):
                 chunks_text = self._wrap_retrieved_content('\n\n---\n\n'.join(parts), source='repository')
             else:
                 chunks_text = self._wrap_retrieved_content(
-                    '(no repository or web result found — respond from general knowledge if appropriate, '
-                    'per no-hallucination rules)',
+                    '(no repository result found — use web search if available, otherwise respond '
+                    'from general knowledge if appropriate, per no-hallucination rules)',
                     source='none',
                 )
             logger.info(f'[tool_loop] search_knowledge_base: {len(retrieved_chunks)} chunks for query: {query}')
