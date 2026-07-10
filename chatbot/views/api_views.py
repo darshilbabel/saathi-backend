@@ -300,7 +300,12 @@ def accept_tnc_view(request):
                 'message': 'access_token is required to accept terms and conditions'
             }, status=400)
 
-        update_elevate_profile(access_token, has_accepted_terms_and_conditions=True)
+        result = update_elevate_profile(access_token, has_accepted_terms_and_conditions=True)
+        if not result:
+            return Response({
+                'status': 'error',
+                'message': 'Failed to update terms and conditions acceptance'
+            }, status=502)
 
         return Response({
             'status': 'ok',
