@@ -48,7 +48,7 @@ def read_elevate_profile(request):
         'profile_details': {
             'profileid': profile_details.get('profileid'),
             'company': company_slug,
-            'has_accepted_tnc': "ONGOING",
+            'has_accepted_tnc': profile_details.get('has_accepted_tnc', False),
             'route': profile_details.get('route'),
             'reroute_url': profile_details.get('reroute_url'),
         }

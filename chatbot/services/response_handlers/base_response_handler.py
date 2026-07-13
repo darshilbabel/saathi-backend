@@ -524,14 +524,22 @@ class BaseResponseHandler(ABC):
                     text = c.get('text', '')
                     header = f'[{title}]({url})' if url else title
                     parts.append(f'Source: {header}\n{text}')
-                chunks_text = '\n\n---\n\n'.join(parts)
+                chunks_text = self._wrap_retrieved_content('\n\n---\n\n'.join(parts), source='repository')
             else:
-                chunks_text = 'No relevant results found in the knowledge base.'
+                chunks_text = self._wrap_retrieved_content(
+                    '(no repository result found — use web search if available, otherwise respond '
+                    'from general knowledge if appropriate, per no-hallucination rules)',
+                    source='none',
+                )
             logger.info(f'[tool_loop] search_knowledge_base: {len(retrieved_chunks)} chunks for query: {query}')
             return chunks_text, retrieved_chunks
 
         logger.error(f'[tool_loop] unknown tool: {tool_name}')
         return f'Tool "{tool_name}" is not available.', []
+
+    def _wrap_retrieved_content(self, text, source):
+        """Wrap tool-retrieved text in an explicit provenance marker before it enters the transcript."""
+        return f'<retrieved_content source="{source}">\n{text}\n</retrieved_content>'
 
     def _call_gateway_non_stream(
         self, gateway_messages, company_bot, session_id, profile_id, tools, tool_choice,
