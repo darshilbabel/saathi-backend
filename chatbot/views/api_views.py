@@ -10,7 +10,7 @@ from chatbot.models.auth_models import BlacklistedToken
 from chatbot.models.company_models import Company, CompanyBot
 from chatbot.models.profile_models import Profile
 from chatbot.serializer.profile_serializer import ProfileSerializer
-from chatbot.utils.elevate.profile_utils import fetch_elevate_user, update_elevate_profile
+from chatbot.utils.elevate.profile_utils import fetch_elevate_user, update_elevate_profile, logout_elevate_user
 from django.http import JsonResponse
 from django.contrib.sessions.backends.db import SessionStore
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -19,6 +19,7 @@ from chatbot.models.company_models import Flow
 
 logger = logging.getLogger('django')
 ACCESS_TOKEN_COOKIE_KEY = os.getenv('ACCESS_TOKEN_COOKIE_KEY')
+REFRESH_TOKEN_COOKIE_KEY = os.getenv('REFRESH_TOKEN_COOKIE_KEY')
 
 
 def _get_access_token(request):
@@ -330,3 +331,38 @@ def accept_tnc_view(request):
             'status': 'error',
             'message': str(e)
         }, status=500)
+
+
+@api_view(['POST'])
+def logout_profile(request):
+    access_token = request.COOKIES.get(ACCESS_TOKEN_COOKIE_KEY) if ACCESS_TOKEN_COOKIE_KEY else None
+    if not access_token:
+        access_token = request.headers.get('X-auth-token')
+
+    refresh_token = request.COOKIES.get(REFRESH_TOKEN_COOKIE_KEY) if REFRESH_TOKEN_COOKIE_KEY else None
+    if not refresh_token:
+        refresh_token = request.headers.get('X-refresh-token')
+
+    logout_result = logout_elevate_user(access_token=access_token, refresh_token=refresh_token)
+
+    if logout_result.get('error') == 'unauthorized':
+        logger.error('[logout_elevate_profile] Elevate auth failure')
+        return Response({
+            'status': 'error',
+            'message': 'Unauthorized.'
+        }, status=logout_result.get('status_code'))
+
+    if logout_result.get('error') == 'elevate_server_error':
+        logger.error('[logout_elevate_profile] Elevate server error')
+        return Response({
+            'status': 'error',
+            'message': 'Elevate service unavailable.'
+        }, status=logout_result.get('status_code') or 502)
+
+    logger.info('[logout_elevate_profile] logout successful')
+    response = Response({'status': 'ok'}, status=200)
+    if ACCESS_TOKEN_COOKIE_KEY:
+        response.delete_cookie(ACCESS_TOKEN_COOKIE_KEY)
+    if REFRESH_TOKEN_COOKIE_KEY:
+        response.delete_cookie(REFRESH_TOKEN_COOKIE_KEY)
+    return response

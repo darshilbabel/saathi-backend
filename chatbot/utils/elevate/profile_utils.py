@@ -126,6 +126,49 @@ def handle_elevate_profile(access_token):
     return upsert_elevate_profile(user_data)
 
 
+def logout_elevate_user(access_token, refresh_token):
+    """HTTP-only logout call to Elevate. No DB access."""
+    try:
+        if not elevate_base_url:
+            logger.error('[logout_elevate_user] ELEVATE_BASE_URL is not configured')
+            return {'error': 'elevate_server_error', 'status_code': 502}
+
+        url = f"{elevate_base_url}/user/v1/account/logout"
+        headers = {'X-auth-token': access_token}
+        response = requests.post(url, headers=headers, data={'refresh_token': refresh_token}, timeout=30)
+        logger.info('[logout_elevate_user] status=%s', response.status_code)
+
+        if response.status_code == 401:
+            logger.error('[logout_elevate_user] unauthorized — token invalid or expired body=%s', _safe_body(response))
+            return {'error': 'unauthorized', 'status_code': 401}
+
+        if response.status_code >= 500:
+            logger.error('[logout_elevate_user] Elevate server error status=%s body=%s', response.status_code, _safe_body(response))
+            return {'error': 'elevate_server_error', 'status_code': response.status_code}
+
+        response.raise_for_status()
+
+        json_data = response.json()
+
+        if json_data.get('responseCode', '').lower() != 'ok':
+            logger.error('[logout_elevate_user] unexpected responseCode=%s', json_data.get('responseCode'))
+            return {'error': 'elevate_server_error', 'status_code': response.status_code}
+
+        return {'success': True}
+
+    except requests.exceptions.HTTPError as e:
+        upstream_status = e.response.status_code if e.response is not None else None
+        logger.error('[logout_elevate_user] HTTP error status=%s body=%s', upstream_status, _safe_body(e.response) if e.response is not None else '')
+        return {'error': 'elevate_server_error', 'status_code': upstream_status}
+    except requests.exceptions.RequestException as e:
+        logger.error('[logout_elevate_user] request failed: %s', e, exc_info=True)
+        return {'error': 'elevate_server_error'}
+    except Exception as e:
+        logger.error('[logout_elevate_user] unexpected error: %s', e, exc_info=True)
+
+    return {'error': 'elevate_server_error'}
+
+
 def update_elevate_profile(access_token, name=None, role=None, school_name=None, district=None, state=None,
                             has_accepted_terms_and_conditions=None):
     try:
