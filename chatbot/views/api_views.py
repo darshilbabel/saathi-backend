@@ -334,7 +334,7 @@ def accept_tnc_view(request):
 
 
 @api_view(['POST'])
-def logout_elevate_profile(request):
+def logout_profile(request):
     access_token = request.COOKIES.get(ACCESS_TOKEN_COOKIE_KEY) if ACCESS_TOKEN_COOKIE_KEY else None
     if not access_token:
         access_token = request.headers.get('X-auth-token')
