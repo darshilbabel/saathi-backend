@@ -360,4 +360,9 @@ def logout_profile(request):
         }, status=logout_result.get('status_code') or 502)
 
     logger.info('[logout_elevate_profile] logout successful')
-    return Response({'status': 'ok'}, status=200)
+    response = Response({'status': 'ok'}, status=200)
+    if ACCESS_TOKEN_COOKIE_KEY:
+        response.delete_cookie(ACCESS_TOKEN_COOKIE_KEY)
+    if REFRESH_TOKEN_COOKIE_KEY:
+        response.delete_cookie(REFRESH_TOKEN_COOKIE_KEY)
+    return response
