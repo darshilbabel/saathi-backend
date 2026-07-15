@@ -403,6 +403,7 @@ class LanguageMapping:
         "kn": {"IN": "kn-IN"},
         "te": {"IN": "te-IN"},
         "or": {"IN": "or-IN"},
+        "ta": {"IN": "ta-IN"},
     }
 
     @classmethod
