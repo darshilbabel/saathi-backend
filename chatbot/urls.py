@@ -43,11 +43,11 @@ urlpatterns = [
     path('api/profile/', api_views.post_profile),
     path('api/get-profile/', api_views.get_profile_view, name='get-profile'),
     path('api/accept-tnc/', api_views.accept_tnc_view, name='accept-tnc'),
+    path('api/logout/', api_views.logout_profile, name='logout-profile'),
     path('api/user_profile/', ProfileListCreateView.as_view(), name='profile-list-create'),
 
     path('api/generate-session/', api_views.generate_session_id, name='generate_session_id'),
     path('api/login/', api_views.login, name='login'),
-    path('api/logout/', api_views.logout, name='logout'),
 
     path('api/end-story/', end_story, name='end-story'),
     path('api/end-story/v2/', end_story_v2, name='end-story-v2'),
