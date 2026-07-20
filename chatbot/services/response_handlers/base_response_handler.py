@@ -498,6 +498,16 @@ class BaseResponseHandler(ABC):
                 },
             ]
 
+            if tool_name == 'search_knowledge_base' and use_web_search and not new_chunks:
+                # Not shown to the user — just nudges the gateway/LLM to actually invoke web_search
+                # instead of answering from internal knowledge, whenever our fallback logic enables it.
+                current_messages = current_messages + [
+                    {
+                        'role': 'assistant',
+                        'content': "I couldn't find this in our knowledge base. Let me search the web for this.",
+                    },
+                ]
+
             # Remove executed tool so the LLM cannot call it again
             current_tools = [
                 t for t in (current_tools or [])
@@ -526,11 +536,18 @@ class BaseResponseHandler(ABC):
                     parts.append(f'Source: {header}\n{text}')
                 chunks_text = self._wrap_retrieved_content('\n\n---\n\n'.join(parts), source='repository')
             else:
-                chunks_text = self._wrap_retrieved_content(
-                    '(no repository result found — use web search if available, otherwise respond '
-                    'from general knowledge if appropriate, per no-hallucination rules)',
-                    source='none',
-                )
+                if getattr(company_bot, 'enable_web_search', False):
+                    no_result_message = (
+                        'No repository result found for this query. Web search is enabled for this bot — '
+                        'call the web_search tool now to answer this query before responding. '
+                        'Do not answer from general/internal knowledge first without doing web search.'
+                    )
+                else:
+                    no_result_message = (
+                        '(no repository result found — respond from general knowledge if appropriate, '
+                        'per no-hallucination rules)'
+                    )
+                chunks_text = self._wrap_retrieved_content(no_result_message, source='none')
             logger.info(f'[tool_loop] search_knowledge_base: {len(retrieved_chunks)} chunks for query: {query}')
             return chunks_text, retrieved_chunks
 
@@ -802,19 +819,44 @@ class BaseResponseHandler(ABC):
 
     def _extract_citation_chunks(self, message):
         """Extract web search citations from a non-stream gateway message and return as chunk dicts."""
-        citations_raw = message.get('citations') or []
         chunks = []
-        for group in citations_raw:
-            if not isinstance(group, list):
-                continue
-            for citation in group:
-                if not isinstance(citation, dict):
+
+        def _collect_from_tool_results(tool_results):
+            for result in (tool_results or []):
+                if not isinstance(result, dict):
                     continue
-                url = citation.get('url', '')
-                title = citation.get('title', '')
-                text = citation.get('cited_text', '')
-                if url or title:
-                    chunks.append({'text': text, 'title': title, 'url': url})
+                for item in result.get('content') or []:
+                    if not isinstance(item, dict):
+                        continue
+                    url = item.get('url', '')
+                    title = item.get('title', '')
+                    if url or title:
+                        chunks.append({'text': item.get('cited_text', ''), 'title': title, 'url': url})
+
+        citations_raw = message.get('citations') or []
+        if citations_raw and isinstance(citations_raw[0], dict) and 'content' in citations_raw[0]:
+            # Anthropic (via litellm): list of web_search_tool_result objects, each with a
+            # nested content[] of {title, url, ...} — not a flat {url, title, cited_text} dict.
+            _collect_from_tool_results(citations_raw)
+        else:
+            for group in citations_raw:
+                if not isinstance(group, list):
+                    continue
+                for citation in group:
+                    if not isinstance(citation, dict):
+                        continue
+                    url = citation.get('url', '')
+                    title = citation.get('title', '')
+                    text = citation.get('cited_text', '')
+                    if url or title:
+                        chunks.append({'text': text, 'title': title, 'url': url})
+
+        if not chunks:
+            # 'citations' can be null even when a web search happened — the raw provider
+            # payload nests results here instead.
+            web_search_results = (message.get('provider_specific_fields') or {}).get('web_search_results') or []
+            _collect_from_tool_results(web_search_results)
+
         return chunks
 
     def _extract_citation_chunks_from_stream(self, citation_events):
