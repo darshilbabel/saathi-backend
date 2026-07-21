@@ -38,7 +38,7 @@ def fetch_elevate_user(access_token):
 
         json_data = response.json()
 
-        if json_data.get('responseCode', '').lower() != 'ok':
+        if str(json_data.get('responseCode') or '').lower() != 'ok':
             logger.error('[fetch_elevate_user] unexpected responseCode=%s', json_data.get('responseCode'))
             return {}
 
@@ -150,7 +150,7 @@ def logout_elevate_user(access_token, refresh_token):
 
         json_data = response.json()
 
-        if json_data.get('responseCode', '').lower() != 'ok':
+        if str(json_data.get('responseCode') or '').lower() != 'ok':
             logger.error('[logout_elevate_user] unexpected responseCode=%s', json_data.get('responseCode'))
             return {'error': 'elevate_server_error', 'status_code': response.status_code}
 
@@ -172,6 +172,10 @@ def logout_elevate_user(access_token, refresh_token):
 def update_elevate_profile(access_token, name=None, role=None, school_name=None, district=None, state=None,
                             has_accepted_terms_and_conditions=None):
     try:
+        if not elevate_base_url:
+            logger.error('[update_elevate_profile] ELEVATE_BASE_URL is not configured')
+            return {'error': 'elevate_server_error', 'status_code': 502}
+
         url = f"{elevate_base_url}/user/v1/user/update"
         headers = {'X-auth-token': access_token}
         body = {'about': 'please get hardcode the about'}  # hardcoded for now
@@ -191,10 +195,30 @@ def update_elevate_profile(access_token, name=None, role=None, school_name=None,
         logger.info(f'[update_elevate_profile] sending body={body}')
         response = requests.patch(url, headers=headers, json=body, timeout=30)
         logger.info(f'[update_elevate_profile] status={response.status_code} body={response.text}')
+
+        if response.status_code == 401:
+            logger.error('[update_elevate_profile] unauthorized — token invalid or expired body=%s', _safe_body(response))
+            return {'error': 'unauthorized', 'status_code': 401}
+
+        if response.status_code >= 500:
+            logger.error('[update_elevate_profile] Elevate server error status=%s body=%s', response.status_code, _safe_body(response))
+            return {'error': 'elevate_server_error', 'status_code': response.status_code}
+
         response.raise_for_status()
-        return response.json()
+
+        json_data = response.json()
+        if str(json_data.get('responseCode') or '').lower() != 'ok':
+            logger.error('[update_elevate_profile] unexpected responseCode=%s', json_data.get('responseCode'))
+            return {'error': 'elevate_server_error', 'status_code': response.status_code}
+
+        return json_data
+    except requests.exceptions.HTTPError as e:
+        upstream_status = e.response.status_code if e.response is not None else None
+        logger.error('[update_elevate_profile] HTTP error status=%s body=%s', upstream_status, _safe_body(e.response) if e.response is not None else '')
+        return {'error': 'elevate_server_error', 'status_code': upstream_status}
     except requests.exceptions.RequestException as e:
         logger.error(f'[update_elevate_profile] request failed: {e}', exc_info=True)
+        return {'error': 'elevate_server_error'}
     except Exception as e:
         logger.error(f'[update_elevate_profile] unexpected error: {e}', exc_info=True)
-    return {}
+    return {'error': 'elevate_server_error'}
