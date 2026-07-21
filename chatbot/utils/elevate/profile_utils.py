@@ -38,7 +38,7 @@ def fetch_elevate_user(access_token):
 
         json_data = response.json()
 
-        if json_data.get('responseCode', '').lower() != 'ok':
+        if str(json_data.get('responseCode') or '').lower() != 'ok':
             logger.error('[fetch_elevate_user] unexpected responseCode=%s', json_data.get('responseCode'))
             return {}
 
@@ -150,7 +150,7 @@ def logout_elevate_user(access_token, refresh_token):
 
         json_data = response.json()
 
-        if json_data.get('responseCode', '').lower() != 'ok':
+        if str(json_data.get('responseCode') or '').lower() != 'ok':
             logger.error('[logout_elevate_user] unexpected responseCode=%s', json_data.get('responseCode'))
             return {'error': 'elevate_server_error', 'status_code': response.status_code}
 
@@ -207,7 +207,7 @@ def update_elevate_profile(access_token, name=None, role=None, school_name=None,
         response.raise_for_status()
 
         json_data = response.json()
-        if json_data.get('responseCode', '').lower() != 'ok':
+        if str(json_data.get('responseCode') or '').lower() != 'ok':
             logger.error('[update_elevate_profile] unexpected responseCode=%s', json_data.get('responseCode'))
             return {'error': 'elevate_server_error', 'status_code': response.status_code}
 
