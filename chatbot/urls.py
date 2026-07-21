@@ -40,7 +40,7 @@ router.register(r'media', MediaViewSet, basename='media')
 
 
 urlpatterns = [
-    path('api/profile/', api_views.post_profile),
+    # path('api/profile/', api_views.post_profile),  # disabled: unvalidated profile creation
     path('api/get-profile/', api_views.get_profile_view, name='get-profile'),
     path('api/accept-tnc/', api_views.accept_tnc_view, name='accept-tnc'),
     path('api/logout/', api_views.logout_profile, name='logout-profile'),
@@ -103,7 +103,7 @@ urlpatterns = [
     path('api/generate-recommendation/', generate_recommendation, name='generate-recommendation'),
     path('api/sync-user-project/', sync_user_project_view, name='sync-user-project'),
     path('api/get-location/', get_location_view, name='get-location'),
-    path('api/get-ip-location/', get_ip_location_view, name='get-ip-location'),
+    # path('api/get-ip-location/', get_ip_location_view, name='get-ip-location'),  # disabled
     path("api/get-presigned-url/", get_presigned_url,  name='get-presigned-url'),
     path("api/image-converter/", convert_image, name='image-converter'),
     path('api/questions/save/', save_ptm_chats, name="save_ptm_chats"),
