@@ -141,6 +141,45 @@ class CommonResponseHandler(BaseResponseHandler):
         return bot_question
 
 
+    def _send_bot_msg_if_present(self, function_call, chat_session, chunks, **kwargs):
+        """Send the optional 'bot_msg' an LLM function call may carry — an acknowledgment to show
+        the user before the call's own effect (state transition, tool action, etc.) runs.
+        Not every tool includes it, so a missing key is a no-op.
+        """
+        arguments = function_call.get('arguments', {})
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                arguments = repair_json(arguments, return_objects=True)
+
+        bot_msg = arguments.get('bot_msg') if isinstance(arguments, dict) else None
+        if not bot_msg:
+            return
+
+        company_bot = kwargs['company_bot']
+        session_id = kwargs['session_id']
+        channel_name = kwargs['channel_name']
+        language = kwargs['language']
+        profile_id = kwargs['profile_id']
+
+        state_machine = CompanyStateMachine.objects.filter(
+            company_bot=company_bot, step=chat_session.current_step
+        ).first()
+
+        translated_message = self.translate_message(
+            message=bot_msg, channel_name=channel_name, step_number=chat_session.current_step,
+            language=language, company_bot=company_bot,
+        )
+
+        self.save_message(
+            session_id=session_id, profile_id=profile_id, message=bot_msg, chunks=chunks,
+            status=ChatStatus.IN_PROGRESS, translated_message=translated_message,
+            stage=state_machine.name if state_machine else None,
+        )
+
+        logger.info(f"Sent bot_msg from function call arguments: {bot_msg[:100]}")
+
     def is_function_call(self, response):
         """Override to handle empty responses as function calls"""
         if super().is_function_call(response):
@@ -229,6 +268,7 @@ class CommonResponseHandler(BaseResponseHandler):
         _profile_tools = {'submit_user_context'}
         if isinstance(response, dict) and 'function_call' in response:
             fc_name = response.get('function_call', {}).get('name', '')
+            self._send_bot_msg_if_present(response['function_call'], chat_session, chunks, **kwargs)
             if fc_name in _freeflow_action_tools:
                 return self._handle_freeflow_function_call(response, chat_session, chunks, **kwargs)
             elif fc_name in _json_message_tools:
