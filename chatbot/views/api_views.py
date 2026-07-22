@@ -224,18 +224,22 @@ def get_profile_view(request):
             profile = Profile.objects.get(email=email, company=company)
 
         access_token = _get_access_token(request)
-        is_tnc_accepted = False
-        if access_token:
-            elevate_user_data = fetch_elevate_user(access_token)
-            if elevate_user_data.get('error'):
-                logger.error(
-                    '[get_profile_view] failed to fetch tnc status from Elevate: %s',
-                    elevate_user_data.get('error')
-                )
-            else:
-                is_tnc_accepted = elevate_user_data.get('has_accepted_tnc', False)
-        else:
-            logger.error('[get_profile_view] no access_token available — defaulting is_tnc_accepted to False')
+        elevate_user_data = fetch_elevate_user(access_token)
+        if elevate_user_data.get('error') == 'unauthorized':
+            logger.error('[get_profile_view] Elevate auth failure')
+            return Response({
+                'status': 'error',
+                'message': 'Unauthorized.'
+            }, status=elevate_user_data.get('status_code'))
+
+        if elevate_user_data.get('error') == 'elevate_server_error':
+            logger.error('[get_profile_view] Elevate server error')
+            return Response({
+                'status': 'error',
+                'message': 'Elevate service unavailable.'
+            }, status=elevate_user_data.get('status_code') or 502)
+
+        is_tnc_accepted = elevate_user_data.get('has_accepted_tnc', False)
 
         is_onboarding_completed = bool(
             profile.other_params and profile.other_params.get('is_onboarding_completed', False)
@@ -295,18 +299,21 @@ def accept_tnc_view(request):
             profile = Profile.objects.get(email=email, company=company)
 
         access_token = _get_access_token(request)
-        if not access_token:
-            return Response({
-                'status': 'error',
-                'message': 'access_token is required to accept terms and conditions'
-            }, status=400)
-
         result = update_elevate_profile(access_token, has_accepted_terms_and_conditions=True)
-        if not result:
+
+        if result.get('error') == 'unauthorized':
+            logger.error('[accept_tnc_view] Elevate auth failure')
             return Response({
                 'status': 'error',
-                'message': 'Failed to update terms and conditions acceptance'
-            }, status=502)
+                'message': 'Unauthorized.'
+            }, status=result.get('status_code'))
+
+        if result.get('error') == 'elevate_server_error':
+            logger.error('[accept_tnc_view] Elevate server error')
+            return Response({
+                'status': 'error',
+                'message': 'Elevate service unavailable.'
+            }, status=result.get('status_code') or 502)
 
         return Response({
             'status': 'ok',
