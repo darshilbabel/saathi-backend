@@ -291,6 +291,7 @@ class StoryLanguageChoices(models.TextChoices):
     KANNADA = 'kn', _('Kannada')
     TELUGU = 'te', _('Telugu')
     ODIA = 'or', _('Odia')
+    TAMIL = 'ta', _('Tamil')
 
 
 class StorySourceChoices(models.TextChoices):
