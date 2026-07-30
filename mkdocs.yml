@@ -17,6 +17,7 @@ nav:
 
   - Getting Started:
       - Developer Setup: setup/developer_setup.md
+      - Gotenberg Server Setup: setup/gotenberg_server_setup.md
   - Applications:
        - Chatbot:
           - Overview: apps/chatbot/overview.md
