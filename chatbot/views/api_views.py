@@ -340,6 +340,52 @@ def accept_tnc_view(request):
         }, status=500)
 
 
+@api_view(['PATCH'])
+def update_profile_view(request):
+    try:
+        update_fields = {
+            field: request.data.get(field)
+            for field in ('name', 'role', 'school_name', 'district', 'state')
+            if request.data.get(field) not in (None, '')
+        }
+
+        if not update_fields:
+            return Response({
+                'status': 'error',
+                'message': 'at least one of name, role, school_name, district, state is required'
+            }, status=400)
+
+        access_token = _get_access_token(request)
+        result = update_elevate_profile(access_token, **update_fields)
+
+        if result.get('error') == 'unauthorized':
+            logger.error('[update_profile_view] Elevate auth failure')
+            return Response({
+                'status': 'error',
+                'message': 'Unauthorized.'
+            }, status=result.get('status_code'))
+
+        if result.get('error') == 'elevate_server_error':
+            logger.error('[update_profile_view] Elevate server error')
+            return Response({
+                'status': 'error',
+                'message': 'Elevate service unavailable.'
+            }, status=result.get('status_code') or 502)
+
+        logger.info('[update_profile_view] updated fields=%s', list(update_fields))
+        return Response({
+            'status': 'ok',
+            'updated_fields': list(update_fields),
+        }, status=200)
+
+    except Exception as e:
+        traceback.print_exc()
+        return Response({
+            'status': 'error',
+            'message': str(e)
+        }, status=500)
+
+
 @api_view(['POST'])
 def logout_profile(request):
     access_token = request.COOKIES.get(ACCESS_TOKEN_COOKIE_KEY) if ACCESS_TOKEN_COOKIE_KEY else None

@@ -21,6 +21,7 @@ from chatbot.views import api_views
 from chatbot.views.bhashini_views import text_speech_view, speech_text, text_translation_view, text_transliterate_view
 from chatbot.views.chat_view import save_chats_view, create_chatsession, save_ptm_chats
 from chatbot.views.drf_views import CompanyChatListCreateView, CompanyChatRetrieveUpdateDestroyView, \
+    CompanyChatFeedbackCreateView, \
     CompanyBotListCreateView, CompanyBotRetrieveUpdateDestroyView, ProfileListCreateView, \
     ProfileRetrieveUpdateDestroyView, ChatSessionListCreateView, ChatSessionRetrieveUpdateDestroyView, \
     ChatSessionRetrieveUpdateDestroyViewSession, BotVernacularListCreateView, BotVernacularRetrieveUpdateDestroyView, \
@@ -43,6 +44,7 @@ urlpatterns = [
     # path('api/profile/', api_views.post_profile),  # disabled: unvalidated profile creation
     path('api/get-profile/', api_views.get_profile_view, name='get-profile'),
     path('api/accept-tnc/', api_views.accept_tnc_view, name='accept-tnc'),
+    path('api/update-profile/', api_views.update_profile_view, name='update-profile'),
     path('api/logout/', api_views.logout_profile, name='logout-profile'),
     path('api/user_profile/', ProfileListCreateView.as_view(), name='profile-list-create'),
 
@@ -60,6 +62,7 @@ urlpatterns = [
     path('api/companychat/', CompanyChatListCreateView.as_view(), name='companychat-list-create'),
     path('api/companychat/<int:pk>/', CompanyChatRetrieveUpdateDestroyView.as_view(),
          name='companychat-retrieve-update-destroy'),
+    path('api/companychat-feedback/', CompanyChatFeedbackCreateView.as_view(), name='companychat-feedback-create'),
 
     path('api/companybot/', CompanyBotListCreateView.as_view(), name='companybot-list-create'),
     path('api/companybot/<int:pk>/', CompanyBotRetrieveUpdateDestroyView.as_view(),

@@ -27,6 +27,36 @@ through to the Noto font named later in the stack.
 
 ---
 
+## 0. Find the running Gotenberg container name
+
+The container name varies per server — it may be a fixed name from `docker-compose.yml`
+(e.g. `saathi_gotenberg`), or an auto-generated Docker name (e.g. `jolly_brattain`) if
+Gotenberg was started with a plain `docker run` without `--name`. `-a` includes
+stopped containers, so you can also spot stale leftovers from earlier testing —
+ignore anything `Created` (never started) or `Exited` long ago; only look at rows
+marked `Up`:
+
+```bash
+sudo docker ps -a --format "{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}" | grep -i gotenberg
+```
+
+Auto-capture the running one into a variable — every command below uses `$GC`, so
+there's nothing to manually type or mis-paste:
+
+```bash
+export GC=$(sudo docker ps --filter status=running --format "{{.Names}}" | grep -i gotenberg | head -1)
+echo "Gotenberg container: $GC"
+```
+
+(If that `grep` matches more than one running container, inspect the list above and
+set `GC` to the correct name yourself.)
+
+Confirm it's running the font-baked image:
+
+```bash
+sudo docker inspect "$GC" --format '{{.Config.Image}}'   # expect gotenberg-noto:8
+```
+
 ## 1. Install the fonts in the Gotenberg container
 
 `fonts-noto-core` covers Tamil, Devanagari (hi), Kannada (kn), Oriya (or), Telugu, etc.
@@ -40,7 +70,8 @@ mkdir -p ~/gotenberg-custom
 cat > ~/gotenberg-custom/Dockerfile <<'EOF'
 FROM gotenberg/gotenberg:8
 USER root
-RUN apt-get update \
+RUN rm -f /etc/apt/sources.list.d/*chrome* \
+    && apt-get update \
     && apt-get install -y --no-install-recommends fonts-noto-core \
     && fc-cache -f \
     && rm -rf /var/lib/apt/lists/*
@@ -50,7 +81,37 @@ EOF
 sudo docker build -t gotenberg-noto:8 ~/gotenberg-custom
 ```
 
-Point the deployment at it. In `docker-compose.yml`, the gotenberg service:
+> **Note:** the `rm -f /etc/apt/sources.list.d/*chrome*` drops the base image's
+> Google Chrome apt repo before updating. That repo's signing key can be
+> expired/rotated, which makes `apt-get update` fail outright (`NO_PUBKEY`,
+> `not signed`) before the font packages are ever reached. It's safe to remove —
+> Chromium is already installed as a binary in the base image; nothing re-installs
+> it via apt.
+
+Point the deployment at it. **Check first whether Gotenberg is managed by
+docker-compose or a plain `docker run`** — the earlier `docker ps -a` output tells
+you: an auto-generated name (e.g. `jolly_brattain`) means plain `docker run`, no
+`--name` given; a fixed/meaningful name (e.g. `saathi_gotenberg`) usually means
+compose or a scripted `docker run --name ...`.
+
+**Case A — docker-compose manages it:**
+
+Find the `docker-compose.yml` actually driving the container (path varies by server):
+
+```bash
+find / -maxdepth 4 -iname "docker-compose*.y*ml" 2>/dev/null
+ls ~/saathi-backend/docker-compose*.y*ml   # usually here
+```
+
+Confirm it's the right file — its `gotenberg:` block should match the running
+container's image and port mapping (edit the `COMPOSE_FILE` value first):
+
+```bash
+COMPOSE_FILE=~/saathi-backend/docker-compose.yml
+grep -n -A10 "gotenberg:" "$COMPOSE_FILE"
+```
+
+Edit the gotenberg service in that file:
 
 ```yaml
 gotenberg:
@@ -71,6 +132,31 @@ cd ~/saathi-backend && sudo docker compose up -d gotenberg
 > next reboot — no manual Compose call needed once the image is built and the
 > `image:` line is edited.
 
+**Case B — plain `docker run` (no compose file), e.g. started inside a tmux session:**
+
+There's no config file to edit — you recreate the container directly. Capture its
+current host port automatically (don't hand-type it), then recreate with an
+explicit `--name` so future lookups don't depend on Docker's random name generator:
+
+```bash
+export PORT=$(sudo docker inspect "$GC" --format '{{(index (index .HostConfig.PortBindings "3000/tcp") 0).HostPort}}')
+echo "Gotenberg host port: $PORT"
+
+sudo docker rm -f "$GC"
+sudo docker run -d --name gotenberg --restart unless-stopped -p "$PORT:3000" gotenberg-noto:8
+export GC=gotenberg
+```
+
+Then find whatever started the *old* container (a tmux session, `~/.bash_history`
+entry, cron `@reboot`, or systemd unit) and update it to launch `gotenberg-noto:8`
+with `--name gotenberg` too — otherwise the next reboot may bring the stock,
+font-less image back up alongside/instead of this one:
+
+```bash
+grep -rn "gotenberg/gotenberg\|docker run" ~/.bash_history /etc/systemd/system /etc/rc.local 2>/dev/null
+crontab -l 2>/dev/null | grep -i gotenberg
+```
+
 ### Quick / temporary (for immediate testing only)
 
 Installs into the running container. **Lost when the container is recreated**
@@ -78,9 +164,9 @@ Installs into the running container. **Lost when the container is recreated**
 in production:
 
 ```bash
-sudo docker exec -u root saathi_gotenberg sh -c \
+sudo docker exec -u root "$GC" sh -c \
   "apt-get update && apt-get install -y --no-install-recommends fonts-noto-core && fc-cache -f"
-sudo docker restart saathi_gotenberg
+sudo docker restart "$GC"
 ```
 
 ---
@@ -129,15 +215,17 @@ print('patched:', 'Noto Sans Tamil' in t.template)
 
 ```bash
 # fonts present in the container?
-sudo docker exec saathi_gotenberg fc-list | grep -iE "tamil|devanagari|kannada|oriya"
+sudo docker exec "$GC" fc-list | grep -iE "tamil|devanagari|kannada|oriya"
 ```
 
 End-to-end: trigger a non-English PDF download and confirm the labels render.
 
 To confirm at the font level which font a rendered PDF actually used (tofu = only
-Liberation embedded; working = Noto embedded):
+Liberation embedded; working = Noto embedded). `GOTENBERG_URL` lives in the app's
+`.env`, not the shell, so pull it from there:
 
 ```bash
+export GOTENBERG_URL=$(grep -m1 '^GOTENBERG_URL=' ~/saathi-backend/.env | cut -d= -f2- | tr -d '"')
 curl -s -o out.pdf -F 'files=@test.html;filename=index.html' "$GOTENBERG_URL"
 strings out.pdf | grep -oiE "(Liberation|Noto)[A-Za-z]*" | sort -u
 ```

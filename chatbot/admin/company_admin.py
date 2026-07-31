@@ -1,13 +1,12 @@
 from django.contrib import admin
-from django.db.models import Q
 from pydantic import ValidationError
 from simple_history.admin import SimpleHistoryAdmin
 from .generic_upload_admin import BatchUploadMixin
-from chatbot.filter.admin_filter import (CompanyChatCompanyFilter, ChatSessionFilter, ProfileCityFilter,
-                                         ProfileStateFilter, ProfileCompanyChatFilter, ProfileEmailFilter)
+from chatbot.filter.admin_filter import (CompanyChatCompanyFilter, ChatSessionFilter,
+                                         ProfileCompanyChatFilter, ProfileEmailFilter)
 from chatbot.filter.custom_date_from_filter import CustomAdvanceDateFilter
-from chatbot.models import Company, Profile, ProfileType, CompanyBot, CompanyChat, ChatSession, \
-    CompanyBotTypeChoices, Voice, VoiceProvider, VoiceType, ImageConfiguration, Flow
+from chatbot.models import Company, Profile, ProfileType, CompanyBot, CompanyChat, CompanyChatFeedback, \
+    ChatSession, CompanyBotTypeChoices, Voice, VoiceProvider, VoiceType, ImageConfiguration, Flow
 from chatbot.models.company_models import CompanyStateMachine
 from chatbot.resources.resource import CompanyChatResource
 from chatbot.resources.company_resource import ChatSessionResource
@@ -292,9 +291,30 @@ class CompanyBotAdmin(BatchUploadMixin, SimpleHistoryAdmin):
     duplicate_bot.short_description = "Duplicate selected bot"
 
 
+class CompanyChatFeedbackInline(admin.TabularInline):
+    """Read-only: feedback rows are created via the feedback API only and are never edited,
+    so admins can view the full history here but can't add/change/delete from this screen."""
+    model = CompanyChatFeedback
+    fk_name = 'company_chat'
+    extra = 0
+    fields = ('thumbs_up', 'thumbs_down', 'comment', 'created_at')
+    readonly_fields = fields
+    ordering = ('-created_at',)
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
 @admin.register(CompanyChat)
 class CompanyChatAdmin(ExportAllFieldsMixin, admin.ModelAdmin):
     list_display = ('session', 'sender', 'receiver', 'message', 'translated_message', 'created_at', 'stage', 'status')
+    inlines = [CompanyChatFeedbackInline]
     list_filter = (
         CustomAdvanceDateFilter,
         ProfileCompanyChatFilter,
@@ -314,42 +334,7 @@ class CompanyChatAdmin(ExportAllFieldsMixin, admin.ModelAdmin):
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)
-        user_email = request.user.email
-        profile = Profile.objects.filter(email=user_email).select_related('company').first()
-        if request.user.is_superuser:
-            return qs.prefetch_related('sender__company', 'receiver__company')
-        elif profile and profile.profile_type == ProfileType.MODERATOR:
-            return qs.filter(
-                Q(sender__company=profile.company) | Q(receiver__company=profile.company)
-            ).prefetch_related('sender__company', 'receiver__company')
-        else:
-            return qs.none()
-
-    def get_search_results(self, request, queryset, search_term):
-        queryset, use_distinct = super().get_search_results(request, queryset, search_term)
-
-        user_email = request.user.email
-        profile = Profile.objects.filter(email=user_email).select_related('company').first()
-        if not request.user.is_superuser and profile and profile.profile_type == ProfileType.MODERATOR:
-            if profile.company:
-                queryset = queryset.filter(
-                    Q(sender__company=profile.company) | Q(receiver__company=profile.company)
-                ).prefetch_related('sender__company', 'receiver__company')
-        return queryset, use_distinct
-
-    def get_list_filter(self, request):
-        user = request.user
-        user_email = request.user.email
-        profile = Profile.objects.filter(email=user_email).select_related('company').first()
-        if not user.is_superuser and profile and profile.profile_type == ProfileType.MODERATOR:
-            company = profile.company
-            if company.slug == 'fmch':
-                return (CustomAdvanceDateFilter, ProfileCompanyChatFilter,
-                        ProfileEmailFilter, 'session', ProfileCityFilter, ProfileStateFilter, 'message_type')
-            if company.slug == 'tfistaging':
-                return (CustomAdvanceDateFilter, ProfileCompanyChatFilter,
-                        ProfileEmailFilter, 'session', CompanyChatCompanyFilter, 'stage')
-        return super().get_list_filter(request)
+        return qs.prefetch_related('sender__company', 'receiver__company')
 
 
 @admin.register(ChatSession)

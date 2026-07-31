@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from chatbot.models.media_models import ProfileMedia
 from chatbot.models.profile_models import Profile
-from chatbot.models.company_models import CompanyChat
+from chatbot.models.company_models import CompanyChat, CompanyChatFeedback
 from chatbot.models.geo_models import ProfileAddress
 from chatbot.serializer.company_serializer import CompanySerializer
 
@@ -82,9 +82,61 @@ class ProfileSerializer(serializers.ModelSerializer):
         return instance
 
 class CompanyChatSerializer(serializers.ModelSerializer):
+    """Note: thumbs_up/thumbs_down reflect only the latest CompanyChatFeedback row for this
+    message (comment text and older feedback history are intentionally not exposed here)."""
     sender = ProfileSerializer(read_only=True)
     receiver = ProfileSerializer(read_only=True)
+    thumbs_up = serializers.SerializerMethodField()
+    thumbs_down = serializers.SerializerMethodField()
 
     class Meta:
         model = CompanyChat
         fields = '__all__'
+
+    def _latest_feedback(self, obj):
+        # list() reuses the prefetch_related('feedbacks') cache set up by the view's
+        # queryset, so this does not issue an extra query per row.
+        feedbacks = list(obj.feedbacks.all())
+        return feedbacks[0] if feedbacks else None
+
+    def get_thumbs_up(self, obj):
+        latest = self._latest_feedback(obj)
+        return bool(latest.thumbs_up) if latest else False
+
+    def get_thumbs_down(self, obj):
+        latest = self._latest_feedback(obj)
+        return bool(latest.thumbs_down) if latest else False
+
+
+class CompanyChatFeedbackSerializer(serializers.ModelSerializer):
+    """Creates a new feedback row. Never updates an existing one — every submission
+    (including switching thumbs up <-> down) is stored as its own history entry."""
+
+    class Meta:
+        model = CompanyChatFeedback
+        fields = ['id', 'company_chat', 'thumbs_up', 'thumbs_down', 'comment', 'created_at']
+        read_only_fields = ['id', 'created_at']
+
+    def validate(self, attrs):
+        has_thumbs_key = 'thumbs_up' in self.initial_data or 'thumbs_down' in self.initial_data
+        has_comment = bool((attrs.get('comment') or '').strip())
+
+        if not has_thumbs_key and not has_comment:
+            raise serializers.ValidationError(
+                'At least one of thumbs_up, thumbs_down, or comment is required.'
+            )
+
+        # Safety net: if the request carries no thumbs info at all (e.g. a comment-only
+        # submission), carry forward the current thumbs state instead of resetting it to
+        # False/False. If either key is present, it's an explicit thumbs decision — use it as-is.
+        if not has_thumbs_key:
+            latest = CompanyChatFeedback.objects.filter(
+                company_chat=attrs.get('company_chat')
+            ).order_by('-created_at').first()
+            if latest:
+                attrs['thumbs_up'] = latest.thumbs_up
+                attrs['thumbs_down'] = latest.thumbs_down
+
+        if attrs.get('thumbs_up', False) and attrs.get('thumbs_down', False):
+            raise serializers.ValidationError('thumbs_up and thumbs_down cannot both be true.')
+        return attrs

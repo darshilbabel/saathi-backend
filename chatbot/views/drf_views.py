@@ -5,26 +5,34 @@ from rest_framework.response import Response
 from rest_framework import status
 from chatbot.filter.drf_filter import ChatSessionProfileFilter
 from chatbot.models import ChatSession, BotVernacular, SessionFlowName, ChatType
-from chatbot.models.company_models import CompanyChat, CompanyBot, Flow
+from chatbot.models.company_models import CompanyChat, CompanyChatFeedback, CompanyBot, Flow
 from chatbot.models.profile_models import Profile
 from chatbot.serializer.base_serializer import ChatSessionSerializer
 from chatbot.serializer.company_serializer import (
     CompanyBotSerializer, BotVernacularSerializer, ImageConfigurationSerializer,
     FlowLanguagesSerializer, FlowConnectionInfoSerializer
 )
-from chatbot.serializer.profile_serializer import ProfileSerializer, CompanyChatSerializer
+from chatbot.serializer.profile_serializer import (
+    ProfileSerializer, CompanyChatSerializer, CompanyChatFeedbackSerializer
+)
 
 
 class CompanyChatListCreateView(generics.ListCreateAPIView):
-    queryset = CompanyChat.objects.all().order_by('created_at')
+    queryset = CompanyChat.objects.all().order_by('created_at').prefetch_related('feedbacks')
     serializer_class = CompanyChatSerializer
     filter_backends = [django_filters.rest_framework.DjangoFilterBackend]
     filterset_fields = ['message', 'sender', 'receiver', 'session', 'status']
 
 
 class CompanyChatRetrieveUpdateDestroyView(generics.RetrieveUpdateAPIView):
-    queryset = CompanyChat.objects.all()
+    queryset = CompanyChat.objects.all().prefetch_related('feedbacks')
     serializer_class = CompanyChatSerializer
+
+
+class CompanyChatFeedbackCreateView(generics.CreateAPIView):
+    """Create-only: FE always POSTs a new feedback row, never PATCH/PUT an existing one."""
+    queryset = CompanyChatFeedback.objects.all()
+    serializer_class = CompanyChatFeedbackSerializer
 
 
 class CompanyBotListCreateView(generics.ListCreateAPIView):
