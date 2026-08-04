@@ -343,11 +343,11 @@ def accept_tnc_view(request):
 @api_view(['PATCH'])
 def update_profile_view(request):
     try:
-        update_fields = {
-            field: request.data.get(field)
-            for field in ('name', 'role', 'school_name', 'district', 'state')
-            if request.data.get(field) not in (None, '')
-        }
+        update_fields = {}
+        for field in ('name', 'role', 'school_name', 'district', 'state'):
+            value = request.data.get(field)
+            if isinstance(value, str) and value.strip():
+                update_fields[field] = value.strip()
 
         if not update_fields:
             return Response({
@@ -378,11 +378,11 @@ def update_profile_view(request):
             'updated_fields': list(update_fields),
         }, status=200)
 
-    except Exception as e:
-        traceback.print_exc()
+    except Exception:
+        logger.error('[update_profile_view] unexpected error', exc_info=True)
         return Response({
             'status': 'error',
-            'message': str(e)
+            'message': 'Internal server error.'
         }, status=500)
 
 

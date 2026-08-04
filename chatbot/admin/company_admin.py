@@ -1,4 +1,5 @@
 from django.contrib import admin
+from django.db.models import Q
 from pydantic import ValidationError
 from simple_history.admin import SimpleHistoryAdmin
 from .generic_upload_admin import BatchUploadMixin
@@ -333,8 +334,15 @@ class CompanyChatAdmin(ExportAllFieldsMixin, admin.ModelAdmin):
     resource_class = CompanyChatResource
 
     def get_queryset(self, request):
-        qs = super().get_queryset(request)
-        return qs.prefetch_related('sender__company', 'receiver__company')
+        qs = super().get_queryset(request).prefetch_related('sender__company', 'receiver__company')
+        user_email = request.user.email
+        profile = Profile.objects.filter(email=user_email).select_related('company').first()
+        if request.user.is_superuser:
+            return qs
+        elif profile and profile.profile_type == ProfileType.MODERATOR:
+            return qs.filter(Q(sender__company=profile.company) | Q(receiver__company=profile.company))
+        else:
+            return qs.none()
 
 
 @admin.register(ChatSession)

@@ -1,3 +1,4 @@
+from django.db import transaction
 from rest_framework import serializers
 from chatbot.models.media_models import ProfileMedia
 from chatbot.models.profile_models import Profile
@@ -94,18 +95,21 @@ class CompanyChatSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
     def _latest_feedback(self, obj):
-        # list() reuses the prefetch_related('feedbacks') cache set up by the view's
-        # queryset, so this does not issue an extra query per row.
-        feedbacks = list(obj.feedbacks.all())
-        return feedbacks[0] if feedbacks else None
+        # The view's queryset annotates latest_thumbs_up/latest_thumbs_down via a Subquery
+        # so the full feedback history is never loaded. Fall back to a direct query for
+        # instances not fetched through that queryset (e.g. a freshly created row on POST).
+        if hasattr(obj, 'latest_thumbs_up'):
+            return obj.latest_thumbs_up, obj.latest_thumbs_down
+        latest = obj.feedbacks.order_by('-created_at').first()
+        return (latest.thumbs_up, latest.thumbs_down) if latest else (None, None)
 
     def get_thumbs_up(self, obj):
-        latest = self._latest_feedback(obj)
-        return bool(latest.thumbs_up) if latest else False
+        thumbs_up, _ = self._latest_feedback(obj)
+        return bool(thumbs_up)
 
     def get_thumbs_down(self, obj):
-        latest = self._latest_feedback(obj)
-        return bool(latest.thumbs_down) if latest else False
+        _, thumbs_down = self._latest_feedback(obj)
+        return bool(thumbs_down)
 
 
 class CompanyChatFeedbackSerializer(serializers.ModelSerializer):
@@ -126,17 +130,31 @@ class CompanyChatFeedbackSerializer(serializers.ModelSerializer):
                 'At least one of thumbs_up, thumbs_down, or comment is required.'
             )
 
-        # Safety net: if the request carries no thumbs info at all (e.g. a comment-only
-        # submission), carry forward the current thumbs state instead of resetting it to
-        # False/False. If either key is present, it's an explicit thumbs decision — use it as-is.
-        if not has_thumbs_key:
-            latest = CompanyChatFeedback.objects.filter(
-                company_chat=attrs.get('company_chat')
-            ).order_by('-created_at').first()
-            if latest:
-                attrs['thumbs_up'] = latest.thumbs_up
-                attrs['thumbs_down'] = latest.thumbs_down
-
-        if attrs.get('thumbs_up', False) and attrs.get('thumbs_down', False):
+        # Explicit thumbs decisions are validated here; the comment-only carry-forward
+        # case is resolved atomically in create() to avoid a read-then-insert race with
+        # a concurrent feedback submission for the same company_chat.
+        if has_thumbs_key and attrs.get('thumbs_up', False) and attrs.get('thumbs_down', False):
             raise serializers.ValidationError('thumbs_up and thumbs_down cannot both be true.')
         return attrs
+
+    def create(self, validated_data):
+        has_thumbs_key = 'thumbs_up' in self.initial_data or 'thumbs_down' in self.initial_data
+        company_chat = validated_data['company_chat']
+
+        with transaction.atomic():
+            # Lock the parent row so ALL feedback submissions for this company_chat —
+            # explicit thumbs decisions and comment-only carry-forwards alike — serialize
+            # here. Without locking on the explicit-thumbs path too, a concurrent
+            # comment-only request could still read a stale "latest" and, since it's
+            # inserted later, overwrite a newer explicit decision.
+            CompanyChat.objects.select_for_update().get(pk=company_chat.pk)
+
+            if not has_thumbs_key:
+                latest = CompanyChatFeedback.objects.filter(
+                    company_chat=company_chat
+                ).order_by('-created_at').first()
+                if latest:
+                    validated_data['thumbs_up'] = latest.thumbs_up
+                    validated_data['thumbs_down'] = latest.thumbs_down
+
+            return super().create(validated_data)

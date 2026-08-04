@@ -170,7 +170,7 @@ def logout_elevate_user(access_token, refresh_token):
 
 
 def update_elevate_profile(access_token, name=None, role=None, school_name=None, district=None, state=None,
-                            has_accepted_terms_and_conditions=None):
+                            about=None, has_accepted_terms_and_conditions=None):
     try:
         if not elevate_base_url:
             logger.error('[update_elevate_profile] ELEVATE_BASE_URL is not configured')
@@ -178,7 +178,7 @@ def update_elevate_profile(access_token, name=None, role=None, school_name=None,
 
         url = f"{elevate_base_url}/user/v1/user/update"
         headers = {'X-auth-token': access_token}
-        body = {'about': 'please get hardcode the about'}  # hardcoded for now
+        body = {}
         if name:
             body['name'] = name
         if role:
@@ -189,12 +189,14 @@ def update_elevate_profile(access_token, name=None, role=None, school_name=None,
             body['userDistrict'] = district
         if state:
             body['profileState'] = state
+        if about:
+            body['about'] = about
         if has_accepted_terms_and_conditions is not None:
             body['has_accepted_terms_and_conditions'] = has_accepted_terms_and_conditions
 
-        logger.info(f'[update_elevate_profile] sending body={body}')
+        logger.info('[update_elevate_profile] sending fields=%s', list(body.keys()))
         response = requests.patch(url, headers=headers, json=body, timeout=30)
-        logger.info(f'[update_elevate_profile] status={response.status_code} body={response.text}')
+        logger.info('[update_elevate_profile] status=%s', response.status_code)
 
         if response.status_code == 401:
             logger.error('[update_elevate_profile] unauthorized — token invalid or expired body=%s', _safe_body(response))

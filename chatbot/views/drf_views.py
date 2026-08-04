@@ -1,4 +1,5 @@
 import django_filters
+from django.db.models import OuterRef, Subquery
 from rest_framework import generics
 from rest_framework.filters import OrderingFilter
 from rest_framework.response import Response
@@ -17,15 +18,27 @@ from chatbot.serializer.profile_serializer import (
 )
 
 
+def _with_latest_feedback(queryset):
+    """Annotate each row with its latest feedback's thumbs_up/thumbs_down instead of
+    prefetching the full (potentially unbounded, append-only) feedback history."""
+    latest_feedback = CompanyChatFeedback.objects.filter(
+        company_chat=OuterRef('pk')
+    ).order_by('-created_at')
+    return queryset.annotate(
+        latest_thumbs_up=Subquery(latest_feedback.values('thumbs_up')[:1]),
+        latest_thumbs_down=Subquery(latest_feedback.values('thumbs_down')[:1]),
+    )
+
+
 class CompanyChatListCreateView(generics.ListCreateAPIView):
-    queryset = CompanyChat.objects.all().order_by('created_at').prefetch_related('feedbacks')
+    queryset = _with_latest_feedback(CompanyChat.objects.all().order_by('created_at'))
     serializer_class = CompanyChatSerializer
     filter_backends = [django_filters.rest_framework.DjangoFilterBackend]
     filterset_fields = ['message', 'sender', 'receiver', 'session', 'status']
 
 
 class CompanyChatRetrieveUpdateDestroyView(generics.RetrieveUpdateAPIView):
-    queryset = CompanyChat.objects.all().prefetch_related('feedbacks')
+    queryset = _with_latest_feedback(CompanyChat.objects.all())
     serializer_class = CompanyChatSerializer
 
 
