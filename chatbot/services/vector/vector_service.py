@@ -16,11 +16,15 @@ def _fetch_chunks(query, top_k, filter_score, priority):
         score = item.get('score', 0)
         text = item.get('text', '')
         if text and len(text) > 20 and score >= filter_score:
+            metadata = item.get('metadata', {}) or {}
             chunks.append({
                 'text': text,
                 'title': item.get('title', ''),
-                'url': item.get('metadata', {}).get('url', ''),
+                'url': metadata.get('url', ''),
                 'score': score,
+                'source': 'kb_search',
+                'company': metadata.get('company', ''),
+                'logo': metadata.get('logo', ''),
             })
     return chunks
 

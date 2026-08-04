@@ -812,10 +812,38 @@ class BaseResponseHandler(ABC):
                 continue
             seen.add(key)
             if url:
-                sources.append({'title': title, 'url': url})
+                source_entry = {'title': title, 'url': url}
             else:
-                sources.append({'title': f'Referred: {title}'})
+                source_entry = {'title': f'Referred: {title}'}
+
+            chunk_source = chunk.get('source', '')
+            if chunk_source == 'web_search':
+                source_entry['source'] = 'web_search'
+                domain = self._extract_domain(url)
+                if domain:
+                    source_entry['domain'] = domain
+            elif chunk_source == 'kb_search':
+                source_entry['source'] = 'kb_search'
+                company = chunk.get('company', '')
+                if company:
+                    source_entry['company'] = company
+                logo = chunk.get('logo', '')
+                if logo:
+                    source_entry['logo'] = logo
+
+            sources.append(source_entry)
         return sources
+
+    @staticmethod
+    def _extract_domain(url):
+        """Return just the site name from a URL's domain — no 'www.' prefix, no TLD (e.g. 'impriindia')."""
+        if not url:
+            return ''
+        from urllib.parse import urlparse
+        netloc = urlparse(url).netloc
+        if netloc.startswith('www.'):
+            netloc = netloc[len('www.'):]
+        return netloc.split('.')[0]
 
     def _extract_citation_chunks(self, message):
         """Extract web search citations from a non-stream gateway message and return as chunk dicts."""
@@ -831,7 +859,8 @@ class BaseResponseHandler(ABC):
                     url = item.get('url', '')
                     title = item.get('title', '')
                     if url or title:
-                        chunks.append({'text': item.get('cited_text', ''), 'title': title, 'url': url})
+                        chunks.append({'text': item.get('cited_text', ''), 'title': title, 'url': url,
+                                       'source': 'web_search'})
 
         citations_raw = message.get('citations') or []
         if citations_raw and isinstance(citations_raw[0], dict) and 'content' in citations_raw[0]:
@@ -849,7 +878,7 @@ class BaseResponseHandler(ABC):
                     title = citation.get('title', '')
                     text = citation.get('cited_text', '')
                     if url or title:
-                        chunks.append({'text': text, 'title': title, 'url': url})
+                        chunks.append({'text': text, 'title': title, 'url': url, 'source': 'web_search'})
 
         if not chunks:
             # 'citations' can be null even when a web search happened — the raw provider
@@ -875,7 +904,7 @@ class BaseResponseHandler(ABC):
                 title = item.get('title', '')
                 text = item.get('cited_text', '') or item.get('text', '')
                 if url or title:
-                    chunks.append({'text': text, 'title': title, 'url': url})
+                    chunks.append({'text': text, 'title': title, 'url': url, 'source': 'web_search'})
         return chunks
 
     def _parse_if_string(self, value, fallback):
