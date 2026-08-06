@@ -41,10 +41,12 @@ sudo docker ps -a --format "{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}" | g
 ```
 
 Auto-capture the running one into a variable — every command below uses `$GC`, so
-there's nothing to manually type or mis-paste:
+there's nothing to manually type or mis-paste. Filter by **image**, not container
+name: an auto-generated name (e.g. `bold_taussig`) never contains "gotenberg", but
+the image always does:
 
 ```bash
-export GC=$(sudo docker ps --filter status=running --format "{{.Names}}" | grep -i gotenberg | head -1)
+export GC=$(sudo docker ps --filter status=running --format "{{.Names}}\t{{.Image}}" | grep -i gotenberg | cut -f1 | head -1)
 echo "Gotenberg container: $GC"
 ```
 
