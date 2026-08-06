@@ -23,7 +23,7 @@ def _fetch_chunks(query, top_k, filter_score, priority):
                 'url': metadata.get('url', ''),
                 'score': score,
                 'source': 'kb_search',
-                'company': metadata.get('company', ''),
+                'company': metadata.get('company_name') or metadata.get('company', ''),
                 'logo': metadata.get('logo', ''),
             })
     return chunks

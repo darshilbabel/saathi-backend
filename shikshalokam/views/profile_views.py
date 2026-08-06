@@ -42,6 +42,8 @@ def read_elevate_profile(request):
             'message': 'Failed to fetch or create profile from Elevate.'
         }, status=500)
 
+    ums_profile = profile_details.get('ums_profile') or {}
+
     logger.info('[read_elevate_profile] profile=%s', profile_details.get('profileid'))
     return Response({
         'status': 'ok',
@@ -51,5 +53,10 @@ def read_elevate_profile(request):
             'has_accepted_tnc': profile_details.get('has_accepted_tnc', False),
             'route': profile_details.get('route'),
             'reroute_url': profile_details.get('reroute_url'),
+            'name': profile_details.get('name'),
+            'role': ums_profile.get('designation'),
+            'school_name': ums_profile.get('org_associated'),
+            'district': ums_profile.get('district'),
+            'state': ums_profile.get('state'),
         }
     }, status=200)

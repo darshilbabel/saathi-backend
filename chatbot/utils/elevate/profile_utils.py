@@ -49,6 +49,8 @@ def fetch_elevate_user(access_token):
             logger.error('[fetch_elevate_user] no userid in Elevate response')
             return {}
 
+        name = user_data.get('name')
+
         language = user_data.get('preferred_language')
         if isinstance(language, dict):
             language = language.get('value', 'en')
@@ -71,6 +73,7 @@ def fetch_elevate_user(access_token):
 
         return {
             'userid': userid,
+            'name': name,
             'language': language,
             'designation': designation_value,
             'school_name': school_name,
@@ -111,6 +114,7 @@ def upsert_elevate_profile(user_data):
         "has_accepted_tnc": user_data.get('has_accepted_tnc', False),
         "route": language,
         "reroute_url": os.getenv('SSO_REROUTE_URL'),
+        "name": user_data.get('name'),
         "ums_profile": {
             "designation": user_data['designation'],
             "org_associated": user_data['school_name'],
