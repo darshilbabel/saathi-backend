@@ -1,9 +1,9 @@
 import codecs
-import json
 
 from django.conf import settings
 from rest_framework.exceptions import ParseError
 from rest_framework.parsers import JSONParser
+from rest_framework.utils import json
 
 
 def _reject_duplicate_keys(pairs):
@@ -24,7 +24,12 @@ class StrictJSONParser(JSONParser):
         encoding = parser_context.get('encoding', settings.DEFAULT_CHARSET)
         try:
             decoded_stream = codecs.getreader(encoding)(stream)
-            return json.load(decoded_stream, object_pairs_hook=_reject_duplicate_keys)
+            parse_constant = json.strict_constant if self.strict else None
+            return json.load(
+                decoded_stream,
+                object_pairs_hook=_reject_duplicate_keys,
+                parse_constant=parse_constant,
+            )
         except ParseError:
             raise
         except ValueError as exc:
