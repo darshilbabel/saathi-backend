@@ -233,6 +233,43 @@ class CompanyChat(models.Model):
         super(CompanyChat, self).save(*args, **kwargs)
 
 
+class CompanyChatFeedback(models.Model):
+    """
+    A single feedback submission (thumbs up/down + optional comment) for a bot response.
+    Rows are append-only — never updated — so the full history is preserved and the
+    most recent row (by created_at) represents the current state.
+    """
+    company_chat = models.ForeignKey(
+        CompanyChat, related_name='feedbacks', on_delete=models.CASCADE,
+        help_text='The bot response (CompanyChat row) this feedback is about.'
+    )
+    thumbs_up = models.BooleanField(
+        default=False, help_text='True if the user gave a positive rating in this submission.'
+    )
+    thumbs_down = models.BooleanField(
+        default=False,
+        help_text='True if the user gave a negative rating in this submission. '
+                   'Cannot be True at the same time as thumbs_up (enforced in the serializer).'
+    )
+    comment = models.TextField(
+        null=True, blank=True, help_text='Optional free-text feedback typed by the user.'
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        help_text='When this feedback was submitted. Immutable — also used to determine '
+                   'the current state (latest row wins) and submission order.'
+    )
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['company_chat', '-created_at']),
+        ]
+
+    def __str__(self):
+        return f'Feedback #{self.id} for CompanyChat #{self.company_chat_id}'
+
+
 class Voice(models.Model):
     """
     Defines a text-to-speech voice configuration for a company bot.

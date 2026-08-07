@@ -1,30 +1,53 @@
 import django_filters
+from django.db.models import OuterRef, Subquery
 from rest_framework import generics
 from rest_framework.filters import OrderingFilter
 from rest_framework.response import Response
 from rest_framework import status
 from chatbot.filter.drf_filter import ChatSessionProfileFilter
+from chatbot.parsers import StrictJSONParser
 from chatbot.models import ChatSession, BotVernacular, SessionFlowName, ChatType
-from chatbot.models.company_models import CompanyChat, CompanyBot, Flow
+from chatbot.models.company_models import CompanyChat, CompanyChatFeedback, CompanyBot, Flow
 from chatbot.models.profile_models import Profile
 from chatbot.serializer.base_serializer import ChatSessionSerializer
 from chatbot.serializer.company_serializer import (
     CompanyBotSerializer, BotVernacularSerializer, ImageConfigurationSerializer,
     FlowLanguagesSerializer, FlowConnectionInfoSerializer
 )
-from chatbot.serializer.profile_serializer import ProfileSerializer, CompanyChatSerializer
+from chatbot.serializer.profile_serializer import (
+    ProfileSerializer, CompanyChatSerializer, CompanyChatFeedbackSerializer
+)
+
+
+def _with_latest_feedback(queryset):
+    """Annotate each row with its latest feedback's thumbs_up/thumbs_down instead of
+    prefetching the full (potentially unbounded, append-only) feedback history."""
+    latest_feedback = CompanyChatFeedback.objects.filter(
+        company_chat=OuterRef('pk')
+    ).order_by('-created_at')
+    return queryset.annotate(
+        latest_thumbs_up=Subquery(latest_feedback.values('thumbs_up')[:1]),
+        latest_thumbs_down=Subquery(latest_feedback.values('thumbs_down')[:1]),
+    )
 
 
 class CompanyChatListCreateView(generics.ListCreateAPIView):
-    queryset = CompanyChat.objects.all().order_by('created_at')
+    queryset = _with_latest_feedback(CompanyChat.objects.all().order_by('created_at'))
     serializer_class = CompanyChatSerializer
     filter_backends = [django_filters.rest_framework.DjangoFilterBackend]
     filterset_fields = ['message', 'sender', 'receiver', 'session', 'status']
 
 
 class CompanyChatRetrieveUpdateDestroyView(generics.RetrieveUpdateAPIView):
-    queryset = CompanyChat.objects.all()
+    queryset = _with_latest_feedback(CompanyChat.objects.all())
     serializer_class = CompanyChatSerializer
+
+
+class CompanyChatFeedbackCreateView(generics.CreateAPIView):
+    """Create-only: FE always POSTs a new feedback row, never PATCH/PUT an existing one."""
+    queryset = CompanyChatFeedback.objects.all()
+    serializer_class = CompanyChatFeedbackSerializer
+    parser_classes = [StrictJSONParser]
 
 
 class CompanyBotListCreateView(generics.ListCreateAPIView):

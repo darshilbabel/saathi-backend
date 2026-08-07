@@ -1,7 +1,8 @@
+from django.db import transaction
 from rest_framework import serializers
 from chatbot.models.media_models import ProfileMedia
 from chatbot.models.profile_models import Profile
-from chatbot.models.company_models import CompanyChat
+from chatbot.models.company_models import CompanyChat, CompanyChatFeedback
 from chatbot.models.geo_models import ProfileAddress
 from chatbot.serializer.company_serializer import CompanySerializer
 
@@ -82,9 +83,93 @@ class ProfileSerializer(serializers.ModelSerializer):
         return instance
 
 class CompanyChatSerializer(serializers.ModelSerializer):
+    """Note: thumbs_up/thumbs_down reflect only the latest CompanyChatFeedback row for this
+    message (comment text and older feedback history are intentionally not exposed here)."""
     sender = ProfileSerializer(read_only=True)
     receiver = ProfileSerializer(read_only=True)
+    thumbs_up = serializers.SerializerMethodField()
+    thumbs_down = serializers.SerializerMethodField()
 
     class Meta:
         model = CompanyChat
         fields = '__all__'
+
+    def _latest_feedback(self, obj):
+        # The view's queryset annotates latest_thumbs_up/latest_thumbs_down via a Subquery
+        # so the full feedback history is never loaded. Fall back to a direct query for
+        # instances not fetched through that queryset (e.g. a freshly created row on POST).
+        if hasattr(obj, 'latest_thumbs_up'):
+            return obj.latest_thumbs_up, obj.latest_thumbs_down
+        latest = obj.feedbacks.order_by('-created_at').first()
+        return (latest.thumbs_up, latest.thumbs_down) if latest else (None, None)
+
+    def get_thumbs_up(self, obj):
+        thumbs_up, _ = self._latest_feedback(obj)
+        return bool(thumbs_up)
+
+    def get_thumbs_down(self, obj):
+        _, thumbs_down = self._latest_feedback(obj)
+        return bool(thumbs_down)
+
+
+class CompanyChatFeedbackSerializer(serializers.ModelSerializer):
+    """Creates a new feedback row. Never updates an existing one — every submission
+    (including switching thumbs up <-> down) is stored as its own history entry."""
+
+    class Meta:
+        model = CompanyChatFeedback
+        fields = ['id', 'company_chat', 'thumbs_up', 'thumbs_down', 'comment', 'created_at']
+        read_only_fields = ['id', 'created_at']
+
+    def to_internal_value(self, data):
+        # ModelSerializer silently drops unknown keys by default; reject them instead so
+        # the request body is required to strictly match the schema.
+        if hasattr(data, 'keys'):
+            unknown_fields = set(data.keys()) - set(self.fields.keys())
+            if unknown_fields:
+                raise serializers.ValidationError(
+                    {field: 'This field is not allowed.' for field in unknown_fields}
+                )
+        return super().to_internal_value(data)
+
+    def validate(self, attrs):
+        thumbs_up = attrs.get('thumbs_up', False)
+        thumbs_down = attrs.get('thumbs_down', False)
+        has_comment = bool((attrs.get('comment') or '').strip())
+
+        # Explicit thumbs decisions are validated here; the comment-only carry-forward
+        # case is resolved atomically in create() to avoid a read-then-insert race with
+        # a concurrent feedback submission for the same company_chat.
+        if thumbs_up and thumbs_down:
+            raise serializers.ValidationError('thumbs_up and thumbs_down cannot both be true.')
+
+        # thumbs_up/thumbs_down default to False, so "both present but false, no comment"
+        # is a no-op submission, not a carry-forward — reject it rather than silently
+        # writing an empty feedback row.
+        if not thumbs_up and not thumbs_down and not has_comment:
+            raise serializers.ValidationError(
+                'At least one of thumbs_up, thumbs_down must be true, or a comment must be provided.'
+            )
+        return attrs
+
+    def create(self, validated_data):
+        has_thumbs_key = 'thumbs_up' in self.initial_data or 'thumbs_down' in self.initial_data
+        company_chat = validated_data['company_chat']
+
+        with transaction.atomic():
+            # Lock the parent row so ALL feedback submissions for this company_chat —
+            # explicit thumbs decisions and comment-only carry-forwards alike — serialize
+            # here. Without locking on the explicit-thumbs path too, a concurrent
+            # comment-only request could still read a stale "latest" and, since it's
+            # inserted later, overwrite a newer explicit decision.
+            CompanyChat.objects.select_for_update().get(pk=company_chat.pk)
+
+            if not has_thumbs_key:
+                latest = CompanyChatFeedback.objects.filter(
+                    company_chat=company_chat
+                ).order_by('-created_at').first()
+                if latest:
+                    validated_data['thumbs_up'] = latest.thumbs_up
+                    validated_data['thumbs_down'] = latest.thumbs_down
+
+            return super().create(validated_data)
