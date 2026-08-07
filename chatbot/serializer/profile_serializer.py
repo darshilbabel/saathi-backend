@@ -121,20 +121,35 @@ class CompanyChatFeedbackSerializer(serializers.ModelSerializer):
         fields = ['id', 'company_chat', 'thumbs_up', 'thumbs_down', 'comment', 'created_at']
         read_only_fields = ['id', 'created_at']
 
-    def validate(self, attrs):
-        has_thumbs_key = 'thumbs_up' in self.initial_data or 'thumbs_down' in self.initial_data
-        has_comment = bool((attrs.get('comment') or '').strip())
+    def to_internal_value(self, data):
+        # ModelSerializer silently drops unknown keys by default; reject them instead so
+        # the request body is required to strictly match the schema.
+        if hasattr(data, 'keys'):
+            unknown_fields = set(data.keys()) - set(self.fields.keys())
+            if unknown_fields:
+                raise serializers.ValidationError(
+                    {field: 'This field is not allowed.' for field in unknown_fields}
+                )
+        return super().to_internal_value(data)
 
-        if not has_thumbs_key and not has_comment:
-            raise serializers.ValidationError(
-                'At least one of thumbs_up, thumbs_down, or comment is required.'
-            )
+    def validate(self, attrs):
+        thumbs_up = attrs.get('thumbs_up', False)
+        thumbs_down = attrs.get('thumbs_down', False)
+        has_comment = bool((attrs.get('comment') or '').strip())
 
         # Explicit thumbs decisions are validated here; the comment-only carry-forward
         # case is resolved atomically in create() to avoid a read-then-insert race with
         # a concurrent feedback submission for the same company_chat.
-        if has_thumbs_key and attrs.get('thumbs_up', False) and attrs.get('thumbs_down', False):
+        if thumbs_up and thumbs_down:
             raise serializers.ValidationError('thumbs_up and thumbs_down cannot both be true.')
+
+        # thumbs_up/thumbs_down default to False, so "both present but false, no comment"
+        # is a no-op submission, not a carry-forward — reject it rather than silently
+        # writing an empty feedback row.
+        if not thumbs_up and not thumbs_down and not has_comment:
+            raise serializers.ValidationError(
+                'At least one of thumbs_up, thumbs_down must be true, or a comment must be provided.'
+            )
         return attrs
 
     def create(self, validated_data):

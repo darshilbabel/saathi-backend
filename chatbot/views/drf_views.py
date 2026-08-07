@@ -5,6 +5,7 @@ from rest_framework.filters import OrderingFilter
 from rest_framework.response import Response
 from rest_framework import status
 from chatbot.filter.drf_filter import ChatSessionProfileFilter
+from chatbot.parsers import StrictJSONParser
 from chatbot.models import ChatSession, BotVernacular, SessionFlowName, ChatType
 from chatbot.models.company_models import CompanyChat, CompanyChatFeedback, CompanyBot, Flow
 from chatbot.models.profile_models import Profile
@@ -46,6 +47,7 @@ class CompanyChatFeedbackCreateView(generics.CreateAPIView):
     """Create-only: FE always POSTs a new feedback row, never PATCH/PUT an existing one."""
     queryset = CompanyChatFeedback.objects.all()
     serializer_class = CompanyChatFeedbackSerializer
+    parser_classes = [StrictJSONParser]
 
 
 class CompanyBotListCreateView(generics.ListCreateAPIView):
