@@ -194,13 +194,22 @@ class CompanyBot(models.Model):
         return self.name
 
     def save(self, *args, **kwargs):
-        if self.pk:
+        update_fields = kwargs.get('update_fields')
+        gateway_fields_changing = update_fields is None or {'gateway_provider', 'gateway_model'} & set(update_fields)
+        if self.pk and gateway_fields_changing:
             old = CompanyBot.objects.filter(pk=self.pk).only('gateway_provider', 'gateway_model').first()
+            reset_fields = set()
             if old and old.gateway_provider != self.gateway_provider:
                 self.gateway_model = None
                 self.gateway_sub_provider = None
+                reset_fields = {'gateway_model', 'gateway_sub_provider'}
             elif old and old.gateway_model != self.gateway_model:
                 self.gateway_sub_provider = None
+                reset_fields = {'gateway_sub_provider'}
+            # update_fields only persists what's listed — make sure resets we just made
+            # in memory are actually included, otherwise they'd be silently dropped.
+            if update_fields is not None and reset_fields:
+                kwargs['update_fields'] = list(set(update_fields) | reset_fields)
         super().save(*args, **kwargs)
 
     class Meta:
