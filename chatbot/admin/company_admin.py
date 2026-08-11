@@ -17,8 +17,9 @@ import logging
 from django.urls import path
 from django.http import HttpResponseRedirect
 from django.urls import reverse
-from django.forms import ModelForm, MultipleChoiceField, CheckboxSelectMultiple
+from django.forms import ModelForm, MultipleChoiceField, CheckboxSelectMultiple, Select
 from ..utils.admin_config.export_mixin import ExportAllFieldsMixin
+from chatbot.llm_models.llm_gateway import get_provider_list, get_model_list, get_openrouter_endpoints
 
 
 class CompanyStateMachineAdmin(admin.TabularInline):
@@ -94,6 +95,10 @@ class CompanyBotAdmin(BatchUploadMixin, SimpleHistoryAdmin):
     inlines = [VoiceProviderAdmin]
     actions = ['duplicate_bot', 'export_selected_bots']
 
+    # Hidden from the add/change form in favor of gateway_provider/gateway_model — the
+    # underlying fields and migrations are unchanged, this is UI-only.
+    exclude = ('provider', 'llm_model')
+
     enable_batch_upload = True
     batch_load_foreign_keys = True
     batch_upload_fields = ['name', 'company', 'provider', 'llm_model', 'context', 'max_token', 'route']
@@ -156,6 +161,17 @@ class CompanyBotAdmin(BatchUploadMixin, SimpleHistoryAdmin):
         else:
             return qs.none()
 
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        if db_field.name == 'gateway_provider':
+            providers = get_provider_list() or []
+            choices = [('', '---------')] + [(p['name'], p['name']) for p in providers if p.get('name')]
+            kwargs['widget'] = Select(choices=choices)
+        elif db_field.name == 'gateway_model':
+            kwargs['widget'] = Select(choices=[('', '---------')])
+        elif db_field.name == 'gateway_sub_provider':
+            kwargs['widget'] = Select(choices=[('', '---------')])
+        return super().formfield_for_dbfield(db_field, request, **kwargs)
+
     def get_form(self, request, obj=None, **kwargs):
         form = super().get_form(request, obj, **kwargs)
         user = request.user
@@ -167,6 +183,61 @@ class CompanyBotAdmin(BatchUploadMixin, SimpleHistoryAdmin):
                 form.base_fields['company'].queryset = form.base_fields['company'].queryset.filter(
                     id=profile[0].company.id)
             form.base_fields = {field_name: form.base_fields[field_name] for field_name in form.base_fields}
+
+        # Make sure the saved gateway_provider always shows up as a selectable option,
+        # even if the live provider list is unavailable (gateway down) or no longer
+        # includes it — the DB value is the source of truth, never drop it silently.
+        provider_field = form.base_fields.get('gateway_provider')
+        if provider_field is not None and obj is not None and obj.gateway_provider:
+            provider_choices = list(provider_field.widget.choices)
+            if obj.gateway_provider not in dict(provider_choices):
+                provider_choices.append((obj.gateway_provider, obj.gateway_provider))
+                provider_field.widget.choices = provider_choices
+
+        # Populate the gateway model dropdown from the saved gateway_provider. If the
+        # provider was just changed but not yet saved, this still reflects the old
+        # provider's models — save once to refresh the model choices.
+        model_field = form.base_fields.get('gateway_model')
+        if model_field is not None and obj is not None and obj.gateway_provider:
+            models_data = get_model_list(obj.gateway_provider) or []
+            choices = [('', '---------')] + [
+                (m['id'], m.get('name') or m['id']) for m in models_data if m.get('id')
+            ]
+            if obj.gateway_model and obj.gateway_model not in dict(choices):
+                choices.append((obj.gateway_model, obj.gateway_model))
+            model_field.widget.choices = choices
+
+        # gateway_sub_provider only applies to the 'openrouter' provider (it picks which
+        # upstream endpoint should serve the model) — hide it entirely for any other
+        # provider, and populate it from the saved gateway_model's endpoint list otherwise.
+        # The stored/passed value is 'tag' (e.g. 'google-vertex/europe'), not 'provider_name'
+        # (e.g. 'Google') — provider_name isn't unique per endpoint (a provider can have
+        # multiple regional/routing variants), tag is the actual routable identifier.
+        # Save-then-reload, same pattern as gateway_model.
+        sub_provider_field = form.base_fields.get('gateway_sub_provider')
+        if sub_provider_field is not None:
+            if not obj or obj.gateway_provider != 'openrouter':
+                form.base_fields.pop('gateway_sub_provider', None)
+            else:
+                choices = [('', '---------')]
+                if obj.gateway_model:
+                    endpoints = get_openrouter_endpoints(obj.gateway_model) or []
+                    seen_tags = []
+                    labels = {}
+                    for endpoint in endpoints:
+                        tag = endpoint.get('tag')
+                        if not tag or tag in seen_tags:
+                            continue
+                        seen_tags.append(tag)
+                        provider_name = endpoint.get('provider_name')
+                        labels[tag] = f'{provider_name} ({tag})' if provider_name else tag
+                    choices += [(tag, labels[tag]) for tag in seen_tags]
+                # DB value is the source of truth — never drop it silently if the gateway is
+                # down or the endpoint list no longer includes it.
+                if obj.gateway_sub_provider and obj.gateway_sub_provider not in dict(choices):
+                    choices.append((obj.gateway_sub_provider, obj.gateway_sub_provider))
+                sub_provider_field.widget.choices = choices
+
         form.base_fields = {field_name: form.base_fields[field_name] for field_name in form.base_fields}
         return form
 

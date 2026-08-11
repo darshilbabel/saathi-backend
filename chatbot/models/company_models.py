@@ -96,6 +96,22 @@ class CompanyBot(models.Model):
         max_length=100, choices=LLMModel.choices, default=LLMModel.GPT4_O_MINI,
         help_text="Select the LLM model to be used by the bot (e.g., GPT-4o, GPT-4)."
     )
+    gateway_provider = models.CharField(
+        max_length=100, null=True, blank=True,
+        help_text="Select the LLM provider to use. Choices are fetched live from the LLM gateway."
+    )
+    gateway_model = models.CharField(
+        max_length=150, null=True, blank=True,
+        help_text="Select the model for the chosen provider. If you just changed the provider, save "
+                  "the bot first — the model list here updates to match the new provider after saving."
+    )
+    gateway_sub_provider = models.CharField(
+        max_length=100, null=True, blank=True,
+        help_text="Only used when the gateway provider is 'openrouter'. Select which upstream endpoint "
+                  "(e.g. DeepInfra, Google, Anthropic) should serve the chosen model. If you just changed "
+                  "the model, save the bot first — the choices here update to match after saving. "
+                  "Stored value is the endpoint's routable tag, not just the provider display name."
+    )
     filter_score = models.FloatField(
         default=0.8,
         help_text="Set the filter score for bot response selection (0-1). Responses below this score will be "
@@ -177,6 +193,16 @@ class CompanyBot(models.Model):
 
     def __str__(self):
         return self.name
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            old = CompanyBot.objects.filter(pk=self.pk).only('gateway_provider', 'gateway_model').first()
+            if old and old.gateway_provider != self.gateway_provider:
+                self.gateway_model = None
+                self.gateway_sub_provider = None
+            elif old and old.gateway_model != self.gateway_model:
+                self.gateway_sub_provider = None
+        super().save(*args, **kwargs)
 
     class Meta:
         indexes = [
