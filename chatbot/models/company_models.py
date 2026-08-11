@@ -109,8 +109,7 @@ class CompanyBot(models.Model):
         max_length=100, null=True, blank=True,
         help_text="Only used when the gateway provider is 'openrouter'. Select which upstream endpoint "
                   "(e.g. DeepInfra, Google, Anthropic) should serve the chosen model. If you just changed "
-                  "the model, save the bot first — the choices here update to match after saving. "
-                  "Stored value is the endpoint's routable tag, not just the provider display name."
+                  "the model, save the bot first — the choices here update to match after saving."
     )
     filter_score = models.FloatField(
         default=0.8,
