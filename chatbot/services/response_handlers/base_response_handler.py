@@ -3,7 +3,9 @@ from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 from chatbot.celery_tasks.common_chat_tasks import save_in_company_db
 from chatbot.celery_tasks.handle_message import translate_and_send_message
-from chatbot.llm_models.llm_gateway import build_gateway_params, call_llm_gateway, call_llm_gateway_stream
+from chatbot.llm_models.llm_gateway import (
+    build_gateway_params, call_llm_gateway, call_llm_gateway_stream, get_effective_provider_model,
+)
 from chatbot.models import ChatSession, ChatStatus, CompanyBotTypeChoices
 from chatbot.models.bot_vernacular_model import BotVernacular
 from chatbot.models.company_models import CompanyStateMachine
@@ -569,8 +571,9 @@ class BaseResponseHandler(ABC):
             if not use_web_search:
                 params.pop('web_search_options', None)
             print(f'[non_stream] use_web_search={use_web_search} bot.enable_web_search={getattr(company_bot, "enable_web_search", "N/A")} web_search_in_params={"web_search_options" in params}')
+            effective_provider, effective_model = get_effective_provider_model(company_bot)
             data = call_llm_gateway(
-                messages=gateway_messages, provider=company_bot.provider, model=self._get_effective_model(company_bot),
+                messages=gateway_messages, provider=effective_provider, model=effective_model,
                 params=params, tools=tools, tool_choice=tool_choice,
             )
             logger.info(f"[gateway] raw response: {data}")
@@ -678,8 +681,9 @@ class BaseResponseHandler(ABC):
             print(f'[stream] use_web_search={use_web_search} bot.enable_web_search={getattr(company_bot, "enable_web_search", "N/A")} web_search_in_params={"web_search_options" in stream_params}')
             citation_chunks = []
             finish_chunk = None
+            effective_provider, effective_model = get_effective_provider_model(company_bot)
             for delta_content, tool_use_delta, chunk_finish_reason, chunk_citations, chunk_finish_data in call_llm_gateway_stream(
-                messages=gateway_messages, provider=company_bot.provider, model=self._get_effective_model(company_bot),
+                messages=gateway_messages, provider=effective_provider, model=effective_model,
                 params=stream_params, tools=tools, tool_choice=tool_choice,
                 cache_policy=cache_policy, metadata=metadata,
             ):
@@ -917,20 +921,6 @@ class BaseResponseHandler(ABC):
             return parsed if isinstance(parsed, type(fallback)) else fallback
         except Exception:
             return fallback
-
-    def _get_effective_model(self, company_bot):
-        """Return the model name to use for gateway calls.
-
-        If other_params contains a 'custom_model' key, that value takes precedence
-        over the llm_model enum field — useful for OpenRouter or any provider that
-        uses model IDs not listed in LLMModel.
-        """
-        custom = (company_bot.other_params or {}).get('custom_model')
-        if isinstance(custom, str):
-            custom = custom.strip()
-            if custom:
-                return custom
-        return company_bot.llm_model
 
     def _with_turn_usage(self, response_data, extra, finish, turn_usage):
         """Return a (response, extra, finish) tuple with turn_usage injected into extra."""

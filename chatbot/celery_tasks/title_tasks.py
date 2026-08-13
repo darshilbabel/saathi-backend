@@ -1,7 +1,7 @@
 from celery import shared_task
 from chatbot.models import ChatSession, CompanyChat, Voice, VoiceType
 from chatbot.models.company_models import Flow
-from chatbot.llm_models.llm_gateway import call_llm_gateway, build_gateway_params
+from chatbot.llm_models.llm_gateway import call_llm_gateway, build_gateway_params, get_effective_provider_model
 from chatbot.utils.chat_utils import get_guided_chat
 from chatbot.utils.audio_provider_utils import text_translate_provider
 import json_repair
@@ -73,12 +73,11 @@ def generate_session_title(session_id, language='en'):
         tool_choice = 'auto'
 
     system_msg = {'role': 'system', 'content': company_bot.context}
-    custom_model = (company_bot.other_params or {}).get('custom_model')
-    effective_model = custom_model.strip() if isinstance(custom_model, str) and custom_model.strip() else company_bot.llm_model
+    effective_provider, effective_model = get_effective_provider_model(company_bot)
 
     response = call_llm_gateway(
         messages=[system_msg] + list(messages),
-        provider=company_bot.provider,
+        provider=effective_provider,
         model=effective_model,
         params=build_gateway_params(company_bot),
         tools=tools or None,
