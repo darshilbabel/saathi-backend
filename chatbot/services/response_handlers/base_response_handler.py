@@ -472,13 +472,12 @@ class BaseResponseHandler(ABC):
             )
             retrieved_chunks.extend(new_chunks or [])
 
-            # If KB search found nothing and web search is configured, activate it for the next call
+            # Web search stays available alongside KB results — chunks may pass the retrieval
+            # threshold but still miss the query, so the LLM decides whether to fall back.
             if tool_name == 'search_knowledge_base':
+                use_web_search = getattr(company_bot, 'enable_web_search', False)
                 if not new_chunks:
-                    use_web_search = getattr(company_bot, 'enable_web_search', False)
                     logger.info('[tool_loop] KB search empty — enabling web search for next iteration')
-                else:
-                    use_web_search = False
 
             tool_call_id = f'tool_{iteration}'
             args_str = _json.dumps(arguments) if isinstance(arguments, dict) else (arguments or '{}')
@@ -536,7 +535,15 @@ class BaseResponseHandler(ABC):
                     text = c.get('text', '')
                     header = f'[{title}]({url})' if url else title
                     parts.append(f'Source: {header}\n{text}')
-                chunks_text = self._wrap_retrieved_content('\n\n---\n\n'.join(parts), source='repository')
+                chunks_content = '\n\n---\n\n'.join(parts)
+                if getattr(company_bot, 'enable_web_search', False):
+                    chunks_content += (
+                        '\n\n---\n\n'
+                        'These repository results passed the retrieval threshold, but check they actually '
+                        'answer the query before using them. If they do not, call the web_search tool now '
+                        'instead of answering from them or saying no result was found.'
+                    )
+                chunks_text = self._wrap_retrieved_content(chunks_content, source='repository')
             else:
                 if getattr(company_bot, 'enable_web_search', False):
                     no_result_message = (
