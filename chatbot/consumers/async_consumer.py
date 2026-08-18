@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 from django.conf import settings
+from django.db import transaction
 from chatbot.celery_tasks.common_chat_tasks import save_in_company_db
 from chatbot.consumers.async_base_consumer import AsyncBaseConsumer
 from chatbot.models import ChatStatus, ChatSession, Profile, CompanyBot, Voice, VoiceType, ChatType, CompanyChat, \
@@ -266,15 +267,21 @@ class AsyncSocketConsumer(AsyncBaseConsumer):
         logger.info(f"Chatsession: %s %s", cs, cs_created)
 
         if not cs_created:
-            if cs.language != self.route:
-                cs.language = self.route
+            # Locked so this read-modify-write of other_params (on a reconnect) can't
+            # race with a still-in-flight celery task's other_params writes for a
+            # previous turn on this same session (usage, finalized_sources, the
+            # pending text-conversion override).
+            with transaction.atomic():
+                cs = ChatSession.objects.select_for_update().get(pk=cs.pk)
+                if cs.language != self.route:
+                    cs.language = self.route
 
-            other_params = cs.other_params or {}
-            other_params["ip_address"] = ip_address
+                other_params = cs.other_params or {}
+                other_params["ip_address"] = ip_address
 
-            cs.other_params = other_params
+                cs.other_params = other_params
 
-            cs.save(update_fields=["language", "other_params"])
+                cs.save(update_fields=["language", "other_params"])
         else:
             cs.other_params = {"ip_address": ip_address}
             cs.save(update_fields=["other_params"])
@@ -285,6 +292,25 @@ class AsyncSocketConsumer(AsyncBaseConsumer):
     @database_sync_to_async
     def translate_message(self, message):
         try:
+            # One-shot override: respond_to_user.next_reply_conversion from the previous bot
+            # turn (persisted in ChatSession.other_params by
+            # BaseResponseHandler._save_pending_text_conversion) takes priority over the
+            # state's static text_conversion_type. Consumed and cleared here, before any
+            # early return below, so it's removed exactly once regardless of whether a
+            # voice provider is actually configured for this message. Locked so this
+            # read-modify-write can't race with a concurrent _save_pending_text_conversion
+            # write for the next turn (e.g. the user sends a new message before the
+            # previous turn's celery task has finished writing other_params).
+            pending_conversion = None
+            with transaction.atomic():
+                chat_session = ChatSession.objects.select_for_update().filter(session=self.session_id).first()
+                if chat_session:
+                    other_params = chat_session.other_params or {}
+                    pending_conversion = other_params.pop('pending_text_conversion_type', None)
+                    if pending_conversion is not None:
+                        chat_session.other_params = other_params
+                        chat_session.save(update_fields=['other_params'])
+
             if not self.company_bot:
                 return message
 
@@ -297,20 +323,10 @@ class AsyncSocketConsumer(AsyncBaseConsumer):
             if not voice_provider:
                 return message
 
-            chat_session = ChatSession.objects.filter(session=self.session_id).first()
             if not chat_session:
                 return message
 
-            # One-shot override: respond_to_user.next_reply_conversion from the previous bot
-            # turn (persisted in ChatSession.other_params by
-            # BaseResponseHandler._save_pending_text_conversion) takes priority over the
-            # state's static text_conversion_type, and is cleared immediately so it only
-            # applies to this single inbound message.
-            other_params = chat_session.other_params or {}
-            pending_conversion = other_params.pop('pending_text_conversion_type', None)
             if pending_conversion is not None:
-                chat_session.other_params = other_params
-                chat_session.save(update_fields=['other_params'])
                 use_transliterate = str(pending_conversion).strip().upper() == TextConversionType.TRANSLITERATE
             else:
                 state_machine = CompanyStateMachine.objects.filter(

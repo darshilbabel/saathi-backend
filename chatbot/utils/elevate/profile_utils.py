@@ -200,10 +200,8 @@ def update_elevate_profile(access_token, name=_UNSET, role=_UNSET, school_name=_
         if has_accepted_terms_and_conditions is not _UNSET:
             body['has_accepted_terms_and_conditions'] = has_accepted_terms_and_conditions
 
-        print("body: ", body)
         logger.info('[update_elevate_profile] sending fields=%s', list(body.keys()))
         response = requests.patch(url, headers=headers, json=body, timeout=30)
-        print("response: ", response)
         logger.info('[update_elevate_profile] status=%s', response.status_code)
 
         if response.status_code == 401:

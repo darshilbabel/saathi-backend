@@ -357,7 +357,6 @@ def update_profile_view(request):
                 update_fields[field] = request.data.get(field)
 
         access_token = _get_access_token(request)
-        print("update_fields: ", update_fields)
         result = update_elevate_profile(access_token, **update_fields)
 
         if result.get('error') == 'unauthorized':
