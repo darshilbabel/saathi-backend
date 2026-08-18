@@ -301,11 +301,26 @@ class AsyncSocketConsumer(AsyncBaseConsumer):
             if not chat_session:
                 return message
 
-            state_machine = CompanyStateMachine.objects.filter(
-                company_bot=self.company_bot, step=chat_session.current_step
-            ).first()
+            # One-shot override: respond_to_user.next_reply_conversion from the previous bot
+            # turn (persisted in ChatSession.other_params by
+            # BaseResponseHandler._save_pending_text_conversion) takes priority over the
+            # state's static text_conversion_type, and is cleared immediately so it only
+            # applies to this single inbound message.
+            other_params = chat_session.other_params or {}
+            pending_conversion = other_params.pop('pending_text_conversion_type', None)
+            if pending_conversion is not None:
+                chat_session.other_params = other_params
+                chat_session.save(update_fields=['other_params'])
+                use_transliterate = str(pending_conversion).strip().upper() == TextConversionType.TRANSLITERATE
+            else:
+                state_machine = CompanyStateMachine.objects.filter(
+                    company_bot=self.company_bot, step=chat_session.current_step
+                ).first()
+                use_transliterate = bool(
+                    state_machine and state_machine.text_conversion_type == TextConversionType.TRANSLITERATE
+                )
 
-            if state_machine and state_machine.text_conversion_type == TextConversionType.TRANSLITERATE:
+            if use_transliterate:
                 transliterate_voice_provider = Voice.objects.filter(
                     company_bot=self.company_bot,
                     type=VoiceType.Transliterate,

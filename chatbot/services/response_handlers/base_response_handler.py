@@ -621,9 +621,12 @@ class BaseResponseHandler(ABC):
                     content = message.get('content', '') or ''
                     quick_reply_chips = self._parse_if_string(ru_args.get('quick_reply_chips'), [])
                     finalized_sources = self._parse_if_string(ru_args.get('finalized_sources'), [])
+                    next_reply_conversion = ru_args.get('next_reply_conversion')
 
                     if finalized_sources is not None:
                         self._save_finalized_sources(session_id, finalized_sources)
+                    if next_reply_conversion:
+                        self._save_pending_text_conversion(session_id, next_reply_conversion)
 
                     citation_chunks = self._extract_citation_chunks(message)
                     all_chunks = list(retrieved_chunks or []) + citation_chunks
@@ -736,9 +739,12 @@ class BaseResponseHandler(ABC):
                     content = ''.join(accumulated_content)
                     quick_reply_chips = self._parse_if_string(tc_arguments.get('quick_reply_chips'), [])
                     finalized_sources = self._parse_if_string(tc_arguments.get('finalized_sources'), [])
+                    next_reply_conversion = tc_arguments.get('next_reply_conversion')
 
                     if finalized_sources is not None:
                         self._save_finalized_sources(session_id, finalized_sources)
+                    if next_reply_conversion:
+                        self._save_pending_text_conversion(session_id, next_reply_conversion)
 
                     all_chunks = list(retrieved_chunks or []) + citation_chunks
                     sources = self._prepare_sources(all_chunks)
@@ -999,6 +1005,19 @@ class BaseResponseHandler(ABC):
             session.save(update_fields=['other_params'])
         except Exception as e:
             logger.error(f'[_save_finalized_sources] failed: {e}')
+
+    def _save_pending_text_conversion(self, session_id, next_reply_conversion):
+        """Persist a one-shot translate/transliterate override for the user's next reply,
+        from respond_to_user.next_reply_conversion. Consumed and cleared by
+        async_consumer.translate_message on the next inbound message."""
+        try:
+            session = ChatSession.objects.get(session=session_id)
+            other_params = session.other_params or {}
+            other_params['pending_text_conversion_type'] = next_reply_conversion
+            session.other_params = other_params
+            session.save(update_fields=['other_params'])
+        except Exception as e:
+            logger.error(f'[_save_pending_text_conversion] failed: {e}')
 
     def _send_chunk(self, channel_name, content, finish_reason, extra_content=None):
         """Send a chunk via channel layer to the WebSocket."""
