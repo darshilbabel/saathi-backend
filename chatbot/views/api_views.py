@@ -308,6 +308,14 @@ def accept_tnc_view(request):
                 'message': 'Unauthorized.'
             }, status=result.get('status_code'))
 
+        if result.get('error') == 'elevate_client_error':
+            logger.error('[accept_tnc_view] Elevate client error message=%s', result.get('message'))
+            return Response({
+                'status': 'error',
+                'message': result.get('message'),
+                'errors': result.get('errors'),
+            }, status=result.get('status_code') or 422)
+
         if result.get('error') == 'elevate_server_error':
             logger.error('[accept_tnc_view] Elevate server error')
             return Response({
@@ -345,17 +353,11 @@ def update_profile_view(request):
     try:
         update_fields = {}
         for field in ('name', 'role', 'school_name', 'district', 'state'):
-            value = request.data.get(field)
-            if isinstance(value, str) and value.strip():
-                update_fields[field] = value.strip()
-
-        if not update_fields:
-            return Response({
-                'status': 'error',
-                'message': 'at least one of name, role, school_name, district, state is required'
-            }, status=400)
+            if field in request.data:
+                update_fields[field] = request.data.get(field)
 
         access_token = _get_access_token(request)
+        print("update_fields: ", update_fields)
         result = update_elevate_profile(access_token, **update_fields)
 
         if result.get('error') == 'unauthorized':
@@ -364,6 +366,14 @@ def update_profile_view(request):
                 'status': 'error',
                 'message': 'Unauthorized.'
             }, status=result.get('status_code'))
+
+        if result.get('error') == 'elevate_client_error':
+            logger.error('[update_profile_view] Elevate client error message=%s', result.get('message'))
+            return Response({
+                'status': 'error',
+                'message': result.get('message'),
+                'errors': result.get('errors'),
+            }, status=result.get('status_code') or 422)
 
         if result.get('error') == 'elevate_server_error':
             logger.error('[update_profile_view] Elevate server error')

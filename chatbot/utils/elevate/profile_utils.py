@@ -6,6 +6,8 @@ from chatbot.models import Profile
 logger = logging.getLogger('django')
 elevate_base_url = os.getenv('ELEVATE_BASE_URL')
 
+_UNSET = object()
+
 
 def _safe_body(response):
     try:
@@ -173,8 +175,8 @@ def logout_elevate_user(access_token, refresh_token):
     return {'error': 'elevate_server_error'}
 
 
-def update_elevate_profile(access_token, name=None, role=None, school_name=None, district=None, state=None,
-                            about=None, has_accepted_terms_and_conditions=None):
+def update_elevate_profile(access_token, name=_UNSET, role=_UNSET, school_name=_UNSET, district=_UNSET, state=_UNSET,
+                            about=_UNSET, has_accepted_terms_and_conditions=_UNSET):
     try:
         if not elevate_base_url:
             logger.error('[update_elevate_profile] ELEVATE_BASE_URL is not configured')
@@ -183,23 +185,25 @@ def update_elevate_profile(access_token, name=None, role=None, school_name=None,
         url = f"{elevate_base_url}/user/v1/user/update"
         headers = {'X-auth-token': access_token}
         body = {}
-        if name:
+        if name is not _UNSET:
             body['name'] = name
-        if role:
+        if role is not _UNSET:
             body['userRole'] = role
-        if school_name:
+        if school_name is not _UNSET:
             body['userSchool'] = school_name
-        if district:
+        if district is not _UNSET:
             body['userDistrict'] = district
-        if state:
+        if state is not _UNSET:
             body['profileState'] = state
-        if about:
+        if about is not _UNSET:
             body['about'] = about
-        if has_accepted_terms_and_conditions is not None:
+        if has_accepted_terms_and_conditions is not _UNSET:
             body['has_accepted_terms_and_conditions'] = has_accepted_terms_and_conditions
 
+        print("body: ", body)
         logger.info('[update_elevate_profile] sending fields=%s', list(body.keys()))
         response = requests.patch(url, headers=headers, json=body, timeout=30)
+        print("response: ", response)
         logger.info('[update_elevate_profile] status=%s', response.status_code)
 
         if response.status_code == 401:
@@ -209,6 +213,19 @@ def update_elevate_profile(access_token, name=None, role=None, school_name=None,
         if response.status_code >= 500:
             logger.error('[update_elevate_profile] Elevate server error status=%s body=%s', response.status_code, _safe_body(response))
             return {'error': 'elevate_server_error', 'status_code': response.status_code}
+
+        if response.status_code >= 400:
+            logger.error('[update_elevate_profile] Elevate client error status=%s body=%s', response.status_code, _safe_body(response))
+            try:
+                error_body = response.json()
+            except ValueError:
+                error_body = {}
+            return {
+                'error': 'elevate_client_error',
+                'status_code': response.status_code,
+                'message': error_body.get('message') or _safe_body(response),
+                'errors': error_body.get('error'),
+            }
 
         response.raise_for_status()
 
