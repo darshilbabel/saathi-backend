@@ -99,6 +99,7 @@ def fetch_elevate_user(access_token):
 
 def upsert_elevate_profile(user_data):
     """DB-only upsert. Expects the dict returned by fetch_elevate_user."""
+    logger.info('[upsert_elevate_profile] payload=%s', user_data)
     if not user_data or user_data.get('error') or not user_data.get('userid'):
         return user_data or {}
 
@@ -185,22 +186,22 @@ def update_elevate_profile(access_token, name=_UNSET, role=_UNSET, school_name=_
         url = f"{elevate_base_url}/user/v1/user/update"
         headers = {'X-auth-token': access_token}
         body = {}
-        if name is not _UNSET:
+        if name is not _UNSET and name is not None:
             body['name'] = name
-        if role is not _UNSET:
+        if role is not _UNSET and role is not None:
             body['userRole'] = role
-        if school_name is not _UNSET:
+        if school_name is not _UNSET and school_name is not None:
             body['userSchool'] = school_name
-        if district is not _UNSET:
+        if district is not _UNSET and district is not None:
             body['userDistrict'] = district
-        if state is not _UNSET:
+        if state is not _UNSET and state is not None:
             body['profileState'] = state
-        if about is not _UNSET:
+        if about is not _UNSET and about is not None:
             body['about'] = about
-        if has_accepted_terms_and_conditions is not _UNSET:
+        if has_accepted_terms_and_conditions is not _UNSET and has_accepted_terms_and_conditions is not None:
             body['has_accepted_terms_and_conditions'] = has_accepted_terms_and_conditions
 
-        logger.info('[update_elevate_profile] sending fields=%s', list(body.keys()))
+        logger.info('[update_elevate_profile] sending body=%s', body)
         response = requests.patch(url, headers=headers, json=body, timeout=30)
         logger.info('[update_elevate_profile] status=%s', response.status_code)
 

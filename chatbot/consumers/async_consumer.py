@@ -44,6 +44,15 @@ class AsyncSocketConsumer(AsyncBaseConsumer):
             # Don't call self.close() here - let the parent handle that
             await super().disconnect(code)
 
+    async def profile_update(self, event):
+        """Merge freshly-submitted profile values (e.g. from submit_user_context) into the live session's
+        ums_profile, prioritizing them over the stale snapshot fetched at authenticate time."""
+        updates = event.get('ums_profile_updates') or {}
+        if not updates:
+            return
+        self.ums_profile = {**(self.ums_profile or {}), **updates}
+        logger.info('[profile_update] merged into live ums_profile=%s', self.ums_profile)
+
     async def receive(self, text_data):
         self.last_activity = asyncio.get_running_loop().time()
         try:
