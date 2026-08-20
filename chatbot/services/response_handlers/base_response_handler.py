@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
+from django.db import transaction
 from chatbot.celery_tasks.common_chat_tasks import save_in_company_db
 from chatbot.celery_tasks.handle_message import translate_and_send_message
 from chatbot.llm_models.llm_gateway import (
@@ -472,13 +473,12 @@ class BaseResponseHandler(ABC):
             )
             retrieved_chunks.extend(new_chunks or [])
 
-            # If KB search found nothing and web search is configured, activate it for the next call
+            # Web search stays available alongside KB results — chunks may pass the retrieval
+            # threshold but still miss the query, so the LLM decides whether to fall back.
             if tool_name == 'search_knowledge_base':
+                use_web_search = getattr(company_bot, 'enable_web_search', False)
                 if not new_chunks:
-                    use_web_search = getattr(company_bot, 'enable_web_search', False)
                     logger.info('[tool_loop] KB search empty — enabling web search for next iteration')
-                else:
-                    use_web_search = False
 
             tool_call_id = f'tool_{iteration}'
             args_str = _json.dumps(arguments) if isinstance(arguments, dict) else (arguments or '{}')
@@ -536,7 +536,15 @@ class BaseResponseHandler(ABC):
                     text = c.get('text', '')
                     header = f'[{title}]({url})' if url else title
                     parts.append(f'Source: {header}\n{text}')
-                chunks_text = self._wrap_retrieved_content('\n\n---\n\n'.join(parts), source='repository')
+                chunks_content = '\n\n---\n\n'.join(parts)
+                if getattr(company_bot, 'enable_web_search', False):
+                    chunks_content += (
+                        '\n\n---\n\n'
+                        'These repository results passed the retrieval threshold, but check they actually '
+                        'answer the query before using them. If they do not, call the web_search tool now '
+                        'instead of answering from them or saying no result was found.'
+                    )
+                chunks_text = self._wrap_retrieved_content(chunks_content, source='repository')
             else:
                 if getattr(company_bot, 'enable_web_search', False):
                     no_result_message = (
@@ -614,9 +622,12 @@ class BaseResponseHandler(ABC):
                     content = message.get('content', '') or ''
                     quick_reply_chips = self._parse_if_string(ru_args.get('quick_reply_chips'), [])
                     finalized_sources = self._parse_if_string(ru_args.get('finalized_sources'), [])
+                    next_reply_conversion = ru_args.get('next_reply_conversion')
 
                     if finalized_sources is not None:
                         self._save_finalized_sources(session_id, finalized_sources)
+                    if content and next_reply_conversion:
+                        self._save_pending_text_conversion(session_id, next_reply_conversion)
 
                     citation_chunks = self._extract_citation_chunks(message)
                     all_chunks = list(retrieved_chunks or []) + citation_chunks
@@ -729,9 +740,12 @@ class BaseResponseHandler(ABC):
                     content = ''.join(accumulated_content)
                     quick_reply_chips = self._parse_if_string(tc_arguments.get('quick_reply_chips'), [])
                     finalized_sources = self._parse_if_string(tc_arguments.get('finalized_sources'), [])
+                    next_reply_conversion = tc_arguments.get('next_reply_conversion')
 
                     if finalized_sources is not None:
                         self._save_finalized_sources(session_id, finalized_sources)
+                    if content and next_reply_conversion:
+                        self._save_pending_text_conversion(session_id, next_reply_conversion)
 
                     all_chunks = list(retrieved_chunks or []) + citation_chunks
                     sources = self._prepare_sources(all_chunks)
@@ -968,16 +982,20 @@ class BaseResponseHandler(ABC):
     def _update_session_usage(self, session_id, usage_cost):
         """Accumulate token usage and cost into ChatSession.other_params['usage']."""
         try:
-            session = ChatSession.objects.get(session=session_id)
-            other_params = session.other_params or {}
-            usage = other_params.get('usage', {})
-            usage['total_input_tokens'] = usage.get('total_input_tokens', 0) + usage_cost['input_tokens']
-            usage['total_output_tokens'] = usage.get('total_output_tokens', 0) + usage_cost['output_tokens']
-            usage['total_tokens'] = usage.get('total_tokens', 0) + usage_cost['total_tokens']
-            usage['total_cost_usd'] = round(usage.get('total_cost_usd', 0) + usage_cost['cost_usd'], 6)
-            other_params['usage'] = usage
-            session.other_params = other_params
-            session.save(update_fields=['other_params'])
+            # Locked so this read-modify-write of other_params can't race with the other
+            # other_params writers on this model (_save_finalized_sources,
+            # _save_pending_text_conversion, async_consumer.translate_message's pop).
+            with transaction.atomic():
+                session = ChatSession.objects.select_for_update().get(session=session_id)
+                other_params = session.other_params or {}
+                usage = other_params.get('usage', {})
+                usage['total_input_tokens'] = usage.get('total_input_tokens', 0) + usage_cost['input_tokens']
+                usage['total_output_tokens'] = usage.get('total_output_tokens', 0) + usage_cost['output_tokens']
+                usage['total_tokens'] = usage.get('total_tokens', 0) + usage_cost['total_tokens']
+                usage['total_cost_usd'] = round(usage.get('total_cost_usd', 0) + usage_cost['cost_usd'], 6)
+                other_params['usage'] = usage
+                session.other_params = other_params
+                session.save(update_fields=['other_params'])
             logger.info(f"[usage] session {session_id} totals updated: {usage}")
         except Exception as e:
             logger.error(f'[_update_session_usage] failed: {e}')
@@ -985,13 +1003,34 @@ class BaseResponseHandler(ABC):
     def _save_finalized_sources(self, session_id, finalized_sources):
         """Persist finalized_sources from respond_to_user into ChatSession.other_params."""
         try:
-            session = ChatSession.objects.get(session=session_id)
-            other_params = session.other_params or {}
-            other_params['finalized_sources'] = finalized_sources
-            session.other_params = other_params
-            session.save(update_fields=['other_params'])
+            # Locked for the same reason as _update_session_usage above.
+            with transaction.atomic():
+                session = ChatSession.objects.select_for_update().get(session=session_id)
+                other_params = session.other_params or {}
+                other_params['finalized_sources'] = finalized_sources
+                session.other_params = other_params
+                session.save(update_fields=['other_params'])
         except Exception as e:
             logger.error(f'[_save_finalized_sources] failed: {e}')
+
+    def _save_pending_text_conversion(self, session_id, next_reply_conversion):
+        """Persist a one-shot translate/transliterate override for the user's next reply,
+        from respond_to_user.next_reply_conversion. Consumed and cleared by
+        async_consumer.translate_message on the next inbound message."""
+        try:
+            # Locked so this read-modify-write of other_params can't race with
+            # async_consumer.translate_message's own locked pop of the same key —
+            # without this, a concurrent unlocked write here could silently resurrect
+            # an override translate_message just cleared, or a concurrent unlocked
+            # pop there could drop this write before it's ever consumed.
+            with transaction.atomic():
+                session = ChatSession.objects.select_for_update().get(session=session_id)
+                other_params = session.other_params or {}
+                other_params['pending_text_conversion_type'] = next_reply_conversion
+                session.other_params = other_params
+                session.save(update_fields=['other_params'])
+        except Exception as e:
+            logger.error(f'[_save_pending_text_conversion] failed: {e}')
 
     def _send_chunk(self, channel_name, content, finish_reason, extra_content=None):
         """Send a chunk via channel layer to the WebSocket."""

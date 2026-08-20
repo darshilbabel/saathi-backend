@@ -1,6 +1,7 @@
 from chatbot.models import ChatStatus, CompanyChat, CompanyBotTypeChoices, LLMProvider, Voice, VoiceType
 from chatbot.models.company_models import CompanyStateMachine
-from chatbot.services.response_handlers.base_response_handler import BaseResponseHandler
+from chatbot.services.response_handlers.base_response_handler import BaseResponseHandler, channel_layer
+from asgiref.sync import async_to_sync
 from chatbot.utils.shiksha_chaupal.date_utils import handle_date_prompt
 from chatbot.celery_tasks.common_chat_tasks import save_in_company_db
 from chatbot.celery_tasks.handle_message import translate_and_send_message
@@ -818,7 +819,11 @@ class CommonResponseHandler(BaseResponseHandler):
 
         profile_id = kwargs.get('profile_id')
         if profile_id:
-            self._save_submitted_user_context(profile_id, arguments, access_token=kwargs.get('access_token'))
+            self._save_submitted_user_context(
+                profile_id, arguments,
+                access_token=kwargs.get('access_token'),
+                channel_name=kwargs.get('channel_name'),
+            )
 
         llm_extra_content = kwargs.get('llm_extra_content') or {}
         llm_extra_content['profile'] = arguments
@@ -833,8 +838,10 @@ class CommonResponseHandler(BaseResponseHandler):
             **kwargs
         )
 
-    def _save_submitted_user_context(self, profile_id, arguments, access_token=None):
-        """Mark onboarding complete locally; push submitted context to Elevate (source of truth for profile data)."""
+    def _save_submitted_user_context(self, profile_id, arguments, access_token=None, channel_name=None):
+        """Mark onboarding complete locally; push submitted context to Elevate (source of truth for profile data).
+        Also prioritize these freshly-submitted values into the live session's in-memory ums_profile immediately —
+        this happens rarely (once per onboarding), so there's no need to wait for a reconnect/re-fetch from Elevate."""
         from chatbot.models.profile_models import Profile
         try:
             profile = Profile.objects.filter(id=profile_id).first()
@@ -847,6 +854,25 @@ class CommonResponseHandler(BaseResponseHandler):
             profile.other_params = other_params
             profile.save(update_fields=['other_params'])
             logger.info('[submit_user_context] marked onboarding complete for profile id=%s', profile_id)
+
+            if channel_name:
+                field_map = {
+                    'role': 'designation',
+                    'school_name': 'org_associated',
+                    'district': 'district',
+                    'state': 'state',
+                }
+                ums_profile_updates = {
+                    ums_field: arguments[field]
+                    for field, ums_field in field_map.items()
+                    if arguments.get(field) is not None
+                }
+                if ums_profile_updates:
+                    async_to_sync(channel_layer.send)(channel_name, {
+                        "type": "profile_update",
+                        "ums_profile_updates": ums_profile_updates,
+                    })
+                    logger.info('[submit_user_context] pushed live ums_profile update=%s', ums_profile_updates)
 
             if access_token:
                 from chatbot.utils.elevate.profile_utils import update_elevate_profile

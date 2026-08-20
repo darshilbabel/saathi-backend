@@ -164,7 +164,7 @@ def export_chats_by_userid(input_csv, output_xlsx):
 # ============================================================================
 # Run — edit the paths below before pasting into shell_plus
 # ============================================================================
-export_chats_by_userid(
-    input_csv='/home/ubuntu/user_sample_data.csv',
-    output_xlsx='/home/ubuntu/sample_output.xlsx',
-)
+# export_chats_by_userid(
+#     input_csv='/home/kunal/user_sample_data.csv',
+#     output_xlsx='/home/kunal/sample_output.xlsx',
+# )
