@@ -1,3 +1,4 @@
+import concurrent.futures
 import io
 import traceback
 import wave
@@ -26,7 +27,7 @@ def split_audio(audio_bytes, chunk_duration=10):
         total_frames = wf.getnframes()
         chunk_frames = chunk_duration * frame_rate  # Frames per 50s chunk
 
-        chunks = []
+        raw_chunks = []
         i = 0
         chunk_number = 0
 
@@ -44,22 +45,22 @@ def split_audio(audio_bytes, chunk_duration=10):
                 chunk_wf.setframerate(frame_rate)
                 chunk_wf.writeframes(chunk_data)
 
-            chunk_audio_bytes = output.getvalue()
-            if is_silent_chunk(chunk_audio_bytes):
-                logger.info(f"Skipping silent chunk {chunk_number}")
-            else:
-                chunk_seconds = chunk_size / frame_rate
-                chunk_kb = len(chunk_audio_bytes) / 1024
-                logger.info("Chunk %s: %.2f sec, %.2f KB", chunk_number, chunk_seconds, chunk_kb)
-
-                chunks.append((chunk_number, chunk_audio_bytes))
-
-            # chunk_seconds = chunk_size / frame_rate
-            # chunk_kb = len(output.getvalue()) / 1024
-            # logger.info("Chunk %s: %.2f sec, %.2f KB", chunk_number, chunk_seconds, chunk_kb)
-
-            # chunks.append((chunk_number, output.getvalue()))
+            raw_chunks.append((chunk_number, output.getvalue(), chunk_size / frame_rate))
             i += chunk_size
             chunk_number += 1
+
+    # Silence detection (pydub/ffmpeg decode) is the expensive part — run it concurrently
+    # instead of blocking the slicing loop above one chunk at a time.
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        is_silent_flags = executor.map(lambda c: is_silent_chunk(c[1]), raw_chunks)
+
+        chunks = []
+        for (chunk_number, chunk_audio_bytes, chunk_seconds), silent in zip(raw_chunks, is_silent_flags):
+            if silent:
+                logger.info(f"Skipping silent chunk {chunk_number}")
+            else:
+                chunk_kb = len(chunk_audio_bytes) / 1024
+                logger.info("Chunk %s: %.2f sec, %.2f KB", chunk_number, chunk_seconds, chunk_kb)
+                chunks.append((chunk_number, chunk_audio_bytes))
 
     return chunks
