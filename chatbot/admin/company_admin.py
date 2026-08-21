@@ -1,5 +1,5 @@
 from django.contrib import admin
-from django.db.models import Q
+from django.db.models import OuterRef, Q, Subquery
 from pydantic import ValidationError
 from simple_history.admin import SimpleHistoryAdmin
 from .generic_upload_admin import BatchUploadMixin
@@ -403,9 +403,17 @@ class CompanyChatAdmin(ExportAllFieldsMixin, admin.ModelAdmin):
 
     export_filename = "company_chats.xlsx"
     resource_class = CompanyChatResource
+    extra_export_fields = {
+        'session_type': lambda obj: obj.session_type,
+    }
 
     def get_queryset(self, request):
         qs = super().get_queryset(request).prefetch_related('sender__company', 'receiver__company')
+        qs = qs.annotate(
+            session_type=Subquery(
+                ChatSession.objects.filter(session=OuterRef('session')).values('session_type')[:1]
+            )
+        )
         user_email = request.user.email
         profile = Profile.objects.filter(email=user_email).select_related('company').first()
         if request.user.is_superuser:
@@ -438,6 +446,33 @@ class ChatSessionAdmin(ExportAllFieldsMixin, admin.ModelAdmin):
     ordering = ('-created_at',)
 
     resource_class = ChatSessionResource
+
+    def get_urls(self):
+        urls = super().get_urls()
+        from chatbot.views.admin.chat_import_views import chat_import_tool_enabled
+        if not chat_import_tool_enabled():
+            return urls
+        custom_urls = [
+            path(
+                'import-company-chats/',
+                self.admin_site.admin_view(self.import_company_chats_view),
+                name='chatbot_chatsession_import_company_chats',
+            ),
+        ]
+        return custom_urls + urls
+
+    def import_company_chats_view(self, request):
+        from chatbot.views.admin.chat_import_views import CompanyChatImportView
+        return CompanyChatImportView.as_view()(request)
+
+    def changelist_view(self, request, extra_context=None):
+        extra_context = extra_context or {}
+        from chatbot.views.admin.chat_import_views import chat_import_tool_enabled
+        if chat_import_tool_enabled():
+            profile = Profile.objects.filter(email=request.user.email).first()
+            is_moderator = bool(profile and profile.profile_type == ProfileType.MODERATOR)
+            extra_context['show_chat_import_tool'] = request.user.is_superuser or is_moderator
+        return super().changelist_view(request, extra_context=extra_context)
 
     def current_question(self, obj):
         return obj.current_step

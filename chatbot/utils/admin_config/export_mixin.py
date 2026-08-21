@@ -9,6 +9,10 @@ from django.contrib import admin
 class ExportAllFieldsMixin:
 
     export_filename = "export.xlsx"
+    # Extra computed columns appended after the model's own fields, e.g.
+    # {'session_type': lambda obj: obj.session_type} for a value pulled in via
+    # an annotation on get_queryset().
+    extra_export_fields = {}
 
     def get_urls(self):
         urls = super().get_urls()
@@ -28,13 +32,14 @@ class ExportAllFieldsMixin:
         ids = request.GET.get("ids", "")
         selected_ids = ids.split(",") if ids else []
 
-        queryset = self.model.objects.filter(id__in=selected_ids)
+        queryset = self.get_queryset(request).filter(id__in=selected_ids)
 
         dataset = tablib.Dataset()
 
         fields = [field.name for field in self.model._meta.fields]
+        extra_fields = list(self.extra_export_fields)
 
-        dataset.headers = fields
+        dataset.headers = fields + extra_fields
 
         for obj in queryset:
 
@@ -52,6 +57,9 @@ class ExportAllFieldsMixin:
                     value = localtime(value).replace(tzinfo=None)
 
                 row.append(value)
+
+            for field in extra_fields:
+                row.append(self.extra_export_fields[field](obj))
 
             dataset.append(row)
 

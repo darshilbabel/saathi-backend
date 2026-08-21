@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from chatbot.models import ChatSession
 from chatbot.models.profile_models import Profile
-from chatbot.models.company_models import Voice
+from chatbot.models.company_models import Voice, CompanyChat
 
 
 class VoiceSerializer(serializers.ModelSerializer):
@@ -17,6 +17,22 @@ class ChatSessionSerializer(serializers.ModelSerializer):
     class Meta:
         model = ChatSession
         fields = '__all__'
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if not instance.title:
+            fallback = getattr(instance, 'first_user_message', None)
+            if fallback is None:
+                fallback = (
+                    CompanyChat.objects
+                    .filter(session=instance.session)
+                    .exclude(sender_id=1)
+                    .order_by('created_at')
+                    .values_list('message', flat=True)
+                    .first()
+                )
+            data['title'] = fallback
+        return data
 
     def create(self, validated_data):
         phone = validated_data.pop('phone', None)
