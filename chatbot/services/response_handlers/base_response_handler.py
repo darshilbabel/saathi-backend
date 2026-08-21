@@ -945,7 +945,7 @@ class BaseResponseHandler(ABC):
 
     def _accumulate_usage(self, accumulator, usage_cost):
         """Add a single call's usage_cost into a running accumulator dict."""
-        for k in ('input_tokens', 'output_tokens', 'total_tokens'):
+        for k in ('input_tokens', 'output_tokens', 'total_tokens', 'cache_read_tokens', 'cache_write_tokens'):
             accumulator[k] = accumulator.get(k, 0) + (usage_cost.get(k) or 0)
         accumulator['cost_usd'] = round(accumulator.get('cost_usd', 0) + (usage_cost.get('cost_usd') or 0), 6)
 
@@ -975,6 +975,8 @@ class BaseResponseHandler(ABC):
             'input_tokens': usage.get('input_tokens', 0) or 0,
             'output_tokens': usage.get('output_tokens', 0) or 0,
             'total_tokens': usage.get('total_tokens', 0) or 0,
+            'cache_read_tokens': usage.get('input_tokens_cache_read', 0) or 0,
+            'cache_write_tokens': usage.get('input_tokens_cache_write', 0) or 0,
             'cost_usd': cost.get('computed_usd', 0) or 0,
         }
         return result if any(result.values()) else None
@@ -992,6 +994,12 @@ class BaseResponseHandler(ABC):
                 usage['total_input_tokens'] = usage.get('total_input_tokens', 0) + usage_cost['input_tokens']
                 usage['total_output_tokens'] = usage.get('total_output_tokens', 0) + usage_cost['output_tokens']
                 usage['total_tokens'] = usage.get('total_tokens', 0) + usage_cost['total_tokens']
+                usage['total_cache_read_tokens'] = (
+                    usage.get('total_cache_read_tokens', 0) + (usage_cost.get('cache_read_tokens') or 0)
+                )
+                usage['total_cache_write_tokens'] = (
+                    usage.get('total_cache_write_tokens', 0) + (usage_cost.get('cache_write_tokens') or 0)
+                )
                 usage['total_cost_usd'] = round(usage.get('total_cost_usd', 0) + usage_cost['cost_usd'], 6)
                 other_params['usage'] = usage
                 session.other_params = other_params

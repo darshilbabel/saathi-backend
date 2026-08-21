@@ -187,29 +187,63 @@ class CompanyBot(models.Model):
         default=WebSearchContextSize.MEDIUM,
         help_text="Amount of context the web search retrieves. Only used when enable_web_search is True."
     )
+    enable_cache = models.BooleanField(
+        default=False,
+        help_text="Enable prompt/tool caching via the LLM gateway. When enabled, Cache TTL and "
+                  "Cache Targets become required."
+    )
+    cache_ttl = models.CharField(
+        max_length=20, null=True, blank=True,
+        help_text="TTL to use for cached content. Choices are fetched live from the LLM gateway. "
+                  "Required when Enable Cache is checked."
+    )
+    cache_targets = models.JSONField(
+        null=True, blank=True,
+        help_text="List of request parts to cache (e.g. ['prompt', 'tools']). Choices are fetched "
+                  "live from the LLM gateway. Required when Enable Cache is checked."
+    )
 
     history = HistoricalRecords()
 
     def __str__(self):
         return self.name
 
+    def clean(self):
+        if self.enable_cache:
+            errors = {}
+            if not self.cache_ttl:
+                errors['cache_ttl'] = "Cache TTL is required when Enable Cache is checked."
+            if not self.cache_targets:
+                errors['cache_targets'] = "Cache targets are required when Enable Cache is checked."
+            if errors:
+                raise ValidationError(errors)
+        elif self.cache_ttl or self.cache_targets:
+            self.cache_ttl = None
+            self.cache_targets = None
+
     def save(self, *args, **kwargs):
         update_fields = kwargs.get('update_fields')
         gateway_fields_changing = update_fields is None or {'gateway_provider', 'gateway_model'} & set(update_fields)
+        reset_fields = set()
         if self.pk and gateway_fields_changing:
             old = CompanyBot.objects.filter(pk=self.pk).only('gateway_provider', 'gateway_model').first()
-            reset_fields = set()
             if old and old.gateway_provider != self.gateway_provider:
                 self.gateway_model = None
                 self.gateway_sub_provider = None
-                reset_fields = {'gateway_model', 'gateway_sub_provider'}
+                reset_fields |= {'gateway_model', 'gateway_sub_provider'}
             elif old and old.gateway_model != self.gateway_model:
                 self.gateway_sub_provider = None
-                reset_fields = {'gateway_sub_provider'}
-            # update_fields only persists what's listed — make sure resets we just made
-            # in memory are actually included, otherwise they'd be silently dropped.
-            if update_fields is not None and reset_fields:
-                kwargs['update_fields'] = list(set(update_fields) | reset_fields)
+                reset_fields |= {'gateway_sub_provider'}
+
+        had_cache_values = bool(self.cache_ttl or self.cache_targets)
+        self.clean()
+        if had_cache_values and not self.enable_cache:
+            reset_fields |= {'cache_ttl', 'cache_targets'}
+
+        # update_fields only persists what's listed — make sure resets we just made
+        # in memory are actually included, otherwise they'd be silently dropped.
+        if update_fields is not None and reset_fields:
+            kwargs['update_fields'] = list(set(update_fields) | reset_fields)
         super().save(*args, **kwargs)
 
     class Meta:

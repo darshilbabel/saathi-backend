@@ -19,7 +19,8 @@ from django.http import HttpResponseRedirect
 from django.urls import reverse
 from django.forms import ModelForm, MultipleChoiceField, CheckboxSelectMultiple, Select
 from ..utils.admin_config.export_mixin import ExportAllFieldsMixin
-from chatbot.llm_models.llm_gateway import get_provider_list, get_model_list, get_openrouter_endpoints
+from chatbot.llm_models.llm_gateway import get_provider_list, get_model_list, get_openrouter_endpoints, \
+    get_cache_options
 
 
 class CompanyStateMachineAdmin(admin.TabularInline):
@@ -78,9 +79,41 @@ class CompanyAdmin(admin.ModelAdmin):
             return qs.none()
 
 
+class CompanyBotAdminForm(ModelForm):
+    cache_targets = MultipleChoiceField(
+        required=False,
+        widget=CheckboxSelectMultiple,
+        help_text="Select one or more cache targets. Choices are fetched live from the LLM gateway. "
+                  "Required when Enable Cache is checked."
+    )
+
+    class Meta:
+        model = CompanyBot
+        fields = "__all__"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        saved_targets = self.instance.cache_targets if self.instance and self.instance.pk else None
+        cache_options = get_cache_options() or {}
+        target_values = cache_options.get('target_values') or []
+        choices = [(t, t) for t in target_values]
+        # DB value is the source of truth — never drop it silently if the gateway is
+        # down or the target list no longer includes it.
+        if saved_targets:
+            known = {t for t, _ in choices}
+            choices += [(t, t) for t in saved_targets if t not in known]
+        self.fields['cache_targets'].choices = choices
+        self.fields['cache_targets'].initial = saved_targets or cache_options.get('target_default') or []
+
+    def clean_cache_targets(self):
+        return list(self.cleaned_data.get('cache_targets') or [])
+
+
 @admin.register(CompanyBot)
 class CompanyBotAdmin(BatchUploadMixin, SimpleHistoryAdmin):
 
+    form = CompanyBotAdminForm
     list_display = ('name', 'company', 'created_at')
     list_filter = (
         'company',
@@ -170,6 +203,8 @@ class CompanyBotAdmin(BatchUploadMixin, SimpleHistoryAdmin):
             kwargs['widget'] = Select(choices=[('', '---------')])
         elif db_field.name == 'gateway_sub_provider':
             kwargs['widget'] = Select(choices=[('', '---------')])
+        elif db_field.name == 'cache_ttl':
+            kwargs['widget'] = Select(choices=[('', '---------')])
         return super().formfield_for_dbfield(db_field, request, **kwargs)
 
     def get_form(self, request, obj=None, **kwargs):
@@ -237,6 +272,29 @@ class CompanyBotAdmin(BatchUploadMixin, SimpleHistoryAdmin):
                 if obj.gateway_sub_provider and obj.gateway_sub_provider not in dict(choices):
                     choices.append((obj.gateway_sub_provider, obj.gateway_sub_provider))
                 sub_provider_field.widget.choices = choices
+
+        # Populate the cache TTL dropdown live from the gateway's /v1/cache/options endpoint,
+        # and surface the supported-providers list in the help text — dynamic, no migration
+        # needed when the gateway's supported provider list changes.
+        ttl_field = form.base_fields.get('cache_ttl')
+        enable_cache_field = form.base_fields.get('enable_cache')
+        if ttl_field is not None or enable_cache_field is not None:
+            cache_options = get_cache_options() or {}
+            ttl_values = cache_options.get('ttl_values') or []
+            providers = cache_options.get('providers') or []
+            provider_note = f" Supported providers: {', '.join(providers)}." if providers else ""
+
+            if ttl_field is not None:
+                choices = [('', '---------')] + [(t, t) for t in ttl_values]
+                if obj is not None and obj.cache_ttl and obj.cache_ttl not in dict(choices):
+                    choices.append((obj.cache_ttl, obj.cache_ttl))
+                ttl_field.widget.choices = choices
+                ttl_field.help_text = f"{ttl_field.help_text}{provider_note}"
+                if obj is None and cache_options.get('ttl_default'):
+                    ttl_field.initial = cache_options['ttl_default']
+
+            if enable_cache_field is not None and provider_note:
+                enable_cache_field.help_text = f"{enable_cache_field.help_text}{provider_note}"
 
         form.base_fields = {field_name: form.base_fields[field_name] for field_name in form.base_fields}
         return form

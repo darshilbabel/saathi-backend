@@ -18,6 +18,8 @@ def _track_usage(session_id, response):
             'input_tokens': usage.get('input_tokens', 0) or 0,
             'output_tokens': usage.get('output_tokens', 0) or 0,
             'total_tokens': usage.get('total_tokens', 0) or 0,
+            'cache_read_tokens': usage.get('input_tokens_cache_read', 0) or 0,
+            'cache_write_tokens': usage.get('input_tokens_cache_write', 0) or 0,
             'cost_usd': cost.get('computed_usd', 0) or 0,
         }
         if not any(usage_cost.values()):
@@ -29,6 +31,10 @@ def _track_usage(session_id, response):
         totals['total_input_tokens'] = totals.get('total_input_tokens', 0) + usage_cost['input_tokens']
         totals['total_output_tokens'] = totals.get('total_output_tokens', 0) + usage_cost['output_tokens']
         totals['total_tokens'] = totals.get('total_tokens', 0) + usage_cost['total_tokens']
+        totals['total_cache_read_tokens'] = totals.get('total_cache_read_tokens', 0) + usage_cost['cache_read_tokens']
+        totals['total_cache_write_tokens'] = (
+            totals.get('total_cache_write_tokens', 0) + usage_cost['cache_write_tokens']
+        )
         totals['total_cost_usd'] = round(totals.get('total_cost_usd', 0) + usage_cost['cost_usd'], 6)
         other_params['usage'] = totals
         session.other_params = other_params

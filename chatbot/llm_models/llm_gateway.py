@@ -41,6 +41,12 @@ def build_gateway_params(company_bot) -> dict:
         params['web_search_options'] = {
             'search_context_size': company_bot.web_search_context_size or 'medium'
         }
+    if getattr(company_bot, 'enable_cache', False):
+        params['cache_options'] = {
+            'enabled': True,
+            'ttl': company_bot.cache_ttl,
+            'targets': company_bot.cache_targets,
+        }
     return params
 
 
@@ -145,6 +151,33 @@ def get_openrouter_endpoints(model: str) -> list | None:
         logger.error('LLM gateway openrouter endpoints request failed: %s', e)
     except Exception as e:
         logger.error('Unexpected error fetching LLM gateway openrouter endpoints: %s', e, exc_info=True)
+
+    return None
+
+
+def get_cache_options() -> dict | None:
+    """
+    GET /v1/cache/options on the LLM gateway service. Returns a dict with
+    'ttl_values', 'target_values', and 'providers' keys, or None on failure.
+    """
+    url = f"{_BASE_URL.rstrip('/')}/v1/cache/options"
+    headers = {
+        'Authorization': f'Bearer {_API_KEY}',
+        'X-Tenant-Id': _TENANT_ID,
+    }
+
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        return response.json().get('data')
+    except requests.exceptions.Timeout:
+        logger.error('LLM gateway cache options request timed out')
+    except requests.exceptions.HTTPError as e:
+        logger.error('LLM gateway cache options HTTP error %s: %s', e.response.status_code, e.response.text)
+    except requests.exceptions.RequestException as e:
+        logger.error('LLM gateway cache options request failed: %s', e)
+    except Exception as e:
+        logger.error('Unexpected error fetching LLM gateway cache options: %s', e, exc_info=True)
 
     return None
 

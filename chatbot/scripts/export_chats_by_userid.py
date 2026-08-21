@@ -30,6 +30,7 @@ import csv
 import pandas as pd
 from django.db.models import Q
 from chatbot.models import Profile
+from chatbot.models.chat_models import ChatSession
 from chatbot.models.company_models import CompanyChat
 
 COMPANY_CHAT_FIELDS = [
@@ -41,6 +42,7 @@ COMPANY_CHAT_FIELDS = [
 
 EMPTY_CHAT_ROW = {f'chat_{f}': '' for f in COMPANY_CHAT_FIELDS}
 EMPTY_CHAT_ROW['chat_file_url_https'] = ''
+EMPTY_CHAT_ROW['chat_session_language'] = ''
 
 
 def _s3_to_https(value):
@@ -77,12 +79,13 @@ def _read_input_rows(input_csv):
         return rows
 
 
-def _chat_row(chat):
+def _chat_row(chat, session_language_map):
     out = {}
     for field in COMPANY_CHAT_FIELDS:
         value = getattr(chat, field)
         out[f'chat_{field}'] = str(value) if value not in (None, '') else ''
     out['chat_file_url_https'] = _s3_to_https(out['chat_file_url'])
+    out['chat_session_language'] = session_language_map.get(chat.session, '')
     return out
 
 
@@ -139,9 +142,13 @@ def export_chats_by_userid(input_csv, output_xlsx):
             continue
 
         stats['profile_found'] += 1
+        session_ids = chats.values_list('session', flat=True).distinct()
+        session_language_map = dict(
+            ChatSession.objects.filter(session__in=session_ids).values_list('session', 'language')
+        )
         for chat in chats:
             output_rows.append({**base, 'mapping_status': 'profile_found',
-                                 **profile_cols, **_chat_row(chat)})
+                                 **profile_cols, **_chat_row(chat, session_language_map)})
 
         if i % 50 == 0:
             print(f"[export_chats_by_userid] processed {i}/{len(input_rows)} input rows")
