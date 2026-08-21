@@ -235,10 +235,14 @@ class CompanyChatImportView(View):
         session_type = (
             _clean_cell(rows.iloc[-1].get('session_type')) if 'session_type' in rows.columns and len(rows) else None
         )
+        session_language = (
+            _clean_cell(rows.iloc[-1].get('chat_session_language'))
+            if 'chat_session_language' in rows.columns and len(rows) else None
+        )
 
         session_profile = override_profile or next(iter(name_to_profile.values()), None)
 
-        chat_session = ChatSession.objects.create(
+        chat_session_kwargs = dict(
             session=target_session_id,
             profile=session_profile,
             company_bot=company_bot,
@@ -246,6 +250,12 @@ class CompanyChatImportView(View):
             session_status=session_status,
             user_id=session_profile.userid if session_profile else None,
         )
+        if session_language:
+            # Model default (English) applies if the export has no usable value - never
+            # pass an empty/invalid value and clobber the field's own default.
+            chat_session_kwargs['language'] = session_language
+
+        chat_session = ChatSession.objects.create(**chat_session_kwargs)
 
         chat_objects = []
         for _, row in rows.iterrows():

@@ -13,8 +13,9 @@ Input file is a JSON array of strings, e.g.:
 """
 
 import json
+from pathlib import Path
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 
 from chatbot.constants.voice_provider_defaults import get_provider_defaults
 from chatbot.models import GenderChoices, Voice, VoiceProvider, VoiceType
@@ -46,6 +47,9 @@ class Command(BaseCommand):
         target_language = options["target"]
         output_path = options["output"]
         providers = [p.strip().lower() for p in options["providers"].split(",") if p.strip()]
+
+        if Path(input_path).resolve() == Path(output_path).resolve():
+            raise CommandError("--input and --output must not point to the same file.")
 
         with open(input_path, "r", encoding="utf-8") as f:
             raw = json.load(f)
