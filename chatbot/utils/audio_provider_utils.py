@@ -385,13 +385,20 @@ def text_translate_provider(message_body, target_language, source_language, voic
                 'content': "No provider found!"
             }
 
-        response = _dispatch_translation(voice_provider, message_body, target_language, source_language, company_bot)
+        try:
+            response = _dispatch_translation(
+                voice_provider, message_body, target_language, source_language, company_bot
+            )
+        except Exception as primary_error:
+            logger.error("Primary translation provider failed: %s", primary_error, exc_info=True)
+            response = {'status': 500, 'content': str(primary_error)}
 
         fallback = getattr(voice_provider, 'fallback_config', None)
-        if response.get('status') != 200 and fallback:
+        if (not isinstance(response, dict) or response.get('status') != 200) and fallback:
             logger.info(
                 "Primary translation provider %s failed for Voice id=%s (%s); trying fallback provider %s",
-                voice_provider.provider, voice_provider.pk, response.get('content'), fallback.provider
+                voice_provider.provider, voice_provider.pk,
+                response.get('content') if isinstance(response, dict) else response, fallback.provider
             )
             response = _dispatch_translation(
                 fallback, message_body, target_language, source_language, company_bot

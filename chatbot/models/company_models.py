@@ -397,6 +397,19 @@ class Voice(models.Model):
         super().clean()
 
         if not self.primary_voice_id:
+            # A primary/non-fallback row — at most one per (company_bot, type,
+            # language), regardless of provider. Matches the single-row lookup
+            # get_voice_provider() (and the ~40 similar lookups across the app)
+            # has always assumed but never enforced.
+            duplicate = Voice.objects.filter(
+                company_bot=self.company_bot, type=self.type, language=self.language,
+            ).exclude(pk=self.pk).first()
+            if duplicate:
+                raise ValidationError(
+                    f"A {self.get_type_display()} voice for language {self.language!r} already exists "
+                    f"({duplicate}). Only one entry per type and language is allowed per bot, "
+                    f"regardless of provider."
+                )
             return
 
         if self.primary_voice_id == self.pk:
@@ -437,8 +450,17 @@ class Voice(models.Model):
         # A fallback config row mirrors its primary row's type/bot — language is
         # entered explicitly and validated (see clean()) to match the primary's.
         if self.primary_voice_id:
+            primary_company_bot_id = self.primary_voice.company_bot_id
+            # Guard against a caller (e.g. bulk import) explicitly setting
+            # company_bot to something other than the primary voice's own bot —
+            # silently trusting primary_voice's company here would let an
+            # imported row get cross-tenant reattached to another company's bot.
+            if self.company_bot_id and self.company_bot_id != primary_company_bot_id:
+                raise ValueError(
+                    "primary_voice must belong to the same company_bot as this Voice row."
+                )
             self.type = self.primary_voice.type
-            self.company_bot_id = self.primary_voice.company_bot_id
+            self.company_bot_id = primary_company_bot_id
 
         defaults = VOICE_PROVIDER_DEFAULTS.get(self.provider, {}).get(self.type, {})
 
@@ -470,6 +492,17 @@ class Voice(models.Model):
             models.Index(fields=['created_at']),
             models.Index(fields=['type']),
             models.Index(fields=['provider']),
+        ]
+        constraints = [
+            # DB-level backstop for the same rule enforced in clean() — catches
+            # raw .create()/bulk_create() paths (e.g. bulk import) that bypass
+            # form validation. Fallback rows (is_fallback=True) are excluded
+            # since they're expected to share (type, language) with their primary.
+            models.UniqueConstraint(
+                fields=['company_bot', 'type', 'language'],
+                condition=models.Q(is_fallback=False),
+                name='unique_primary_voice_per_bot_type_language',
+            ),
         ]
 
 

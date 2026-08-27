@@ -1,7 +1,7 @@
 import json
 from import_export import resources, fields
 from import_export.widgets import ForeignKeyWidget
-from chatbot.models import CompanyBot, Voice, CompanyStateMachine, Company
+from chatbot.models import CompanyBot, Voice, CompanyStateMachine, Company, VoiceType
 
 
 class CompanyBotResource(resources.ModelResource):
@@ -45,7 +45,12 @@ class CompanyBotResource(resources.ModelResource):
                 'provider_code': voice.provider_code,
                 'gender': voice.gender,
                 'voice_speed': voice.voice_speed,
-                'other_params': voice.other_params
+                'other_params': voice.other_params,
+                'is_fallback': voice.is_fallback,
+                # Reference the fallback's primary by language (unique within a bot
+                # for Text To Text), not by raw pk — meaningless/unsafe across a
+                # database boundary. See after_import_instance for resolution.
+                'primary_voice_language': voice.primary_voice.language if voice.primary_voice_id else None,
             }
             voice_data.append(voice_dict)
         return json.dumps(voice_data)
@@ -97,13 +102,20 @@ class CompanyBotResource(resources.ModelResource):
                 if not new:
                     Voice.all_voices.filter(company_bot=instance).delete()
 
-                for voice_dict in voices_data:
-                    # Skip if essential fields are missing
-                    if not voice_dict.get('type') or not voice_dict.get('provider'):
-                        continue
+                # Skip if essential fields are missing
+                voices_data = [
+                    v for v in voices_data if v.get('type') and v.get('provider')
+                ]
+                # Primaries first, then fallbacks — a fallback's primary is
+                # resolved by language within this bot, never trusted as a raw
+                # pk (not present here anyway; see primary_voice_language).
+                primary_voices_data = [v for v in voices_data if not v.get('primary_voice_language')]
+                fallback_voices_data = [v for v in voices_data if v.get('primary_voice_language')]
 
-                    Voice.objects.create(
+                def _create_voice(voice_dict, primary_voice=None):
+                    return Voice.objects.create(
                         company_bot=instance,
+                        primary_voice=primary_voice,
                         type=voice_dict.get('type'),
                         provider=voice_dict.get('provider'),
                         name=voice_dict.get('name'),
@@ -114,6 +126,18 @@ class CompanyBotResource(resources.ModelResource):
                         voice_speed=voice_dict.get('voice_speed', 1.0),
                         other_params=voice_dict.get('other_params')
                     )
+
+                for voice_dict in primary_voices_data:
+                    _create_voice(voice_dict)
+
+                for voice_dict in fallback_voices_data:
+                    primary_language = voice_dict['primary_voice_language']
+                    primary_voice = Voice.objects.filter(
+                        company_bot=instance, type=VoiceType.TextToText, language=primary_language
+                    ).first()
+                    if not primary_voice:
+                        continue  # No matching primary — skip, don't guess
+                    _create_voice(voice_dict, primary_voice=primary_voice)
             except (json.JSONDecodeError, KeyError) as e:
                 pass  # Skip if JSON is invalid
 

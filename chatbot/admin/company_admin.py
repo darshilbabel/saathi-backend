@@ -406,7 +406,9 @@ class CompanyBotAdmin(BatchUploadMixin, SimpleHistoryAdmin):
         old_entries_by_pk = {}
         for f in formset.forms:
             if f.instance.pk:
-                v = Voice.objects.filter(pk=f.instance.pk).only("other_params").first()
+                # all_voices (not objects) — this formset can be the fallback
+                # inline too, whose rows are excluded from the default manager.
+                v = Voice.all_voices.filter(pk=f.instance.pk).only("other_params").first()
                 if v and v.other_params and "glossary_entries" in v.other_params:
                     old_entries_by_pk[v.pk] = google_glossary.normalize_glossary_entries(
                         v.other_params.get("glossary_entries")
@@ -417,7 +419,7 @@ class CompanyBotAdmin(BatchUploadMixin, SimpleHistoryAdmin):
         for f in formset.forms:
             if not f.instance.pk or f.cleaned_data.get("DELETE"):
                 continue
-            inst = Voice.objects.filter(pk=f.instance.pk).first()
+            inst = Voice.all_voices.filter(pk=f.instance.pk).first()
             if not inst or inst.provider != VoiceProvider.GOOGLE or inst.type != VoiceType.TextToText:
                 continue
             params = inst.other_params or {}
