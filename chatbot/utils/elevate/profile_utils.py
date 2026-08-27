@@ -21,6 +21,8 @@ def _parse_error_body(response):
         error_body = response.json()
     except ValueError:
         error_body = {}
+    if not isinstance(error_body, dict):
+        error_body = {}
     return {
         'message': error_body.get('message') or _safe_body(response),
         'errors': error_body.get('error'),
