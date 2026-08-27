@@ -338,10 +338,25 @@ class CompanyChatFeedback(models.Model):
         return f'Feedback #{self.id} for CompanyChat #{self.company_chat_id}'
 
 
+class VoiceManager(models.Manager):
+    """Excludes Voice rows that only exist as another row's fallback config."""
+
+    def get_queryset(self):
+        return super().get_queryset().filter(is_fallback=False)
+
+
 class Voice(models.Model):
     """
     Defines a text-to-speech voice configuration for a company bot.
     Stores provider details, language, gender, and playback settings.
+
+    A row can optionally be a fallback config for another (primary) Voice row,
+    via `primary_voice` — used to retry translation with a different provider
+    if the primary one errors. `is_fallback` is derived automatically from
+    `primary_voice` (see save()) and is the authoritative DB-level marker of
+    which rows are fallback configs vs. real/primary provider rows. Type and
+    company_bot are mirrored from the primary row automatically; language must
+    be entered explicitly and is validated to match the primary row's language.
     """
 
     company_bot = models.ForeignKey(CompanyBot, on_delete=models.SET_NULL, null=True, blank=True)
@@ -357,6 +372,14 @@ class Voice(models.Model):
         null=True, blank=True, default=1.0,
         validators=[MinValueValidator(0.25), MaxValueValidator(4.0)]
     )
+    primary_voice = models.OneToOneField(
+        'self', on_delete=models.CASCADE, null=True, blank=True, related_name='fallback_config',
+        help_text="Set only on a row that is a fallback config for a Text To Text primary row."
+    )
+    is_fallback = models.BooleanField(
+        default=False, editable=False,
+        help_text="Auto-derived from primary_voice — True for a row that is a fallback config."
+    )
 
     other_params = models.JSONField(null=True, blank=True)
     history = HistoricalRecords()
@@ -364,18 +387,63 @@ class Voice(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = VoiceManager()
+    all_voices = models.Manager()
+
     def __str__(self):
-        return f"{self.provider}-{self.type}"
+        return f"{self.get_provider_display()} - {self.get_type_display()} - {self.language}"
+
+    def clean(self):
+        super().clean()
+
+        if not self.primary_voice_id:
+            return
+
+        if self.primary_voice_id == self.pk:
+            raise ValidationError("A fallback voice cannot reference itself as its primary voice.")
+
+        if self.primary_voice.type != VoiceType.TextToText:
+            raise ValidationError("A fallback voice can only be set for a Text To Text (translation) row.")
+
+        if self.primary_voice.is_fallback:
+            raise ValidationError("Cannot set a fallback under another fallback row (only one level is supported).")
+
+        other_fallback = Voice.all_voices.filter(
+            primary_voice_id=self.primary_voice_id
+        ).exclude(pk=self.pk).first()
+        if other_fallback:
+            raise ValidationError(
+                f"'{self.primary_voice}' already has a fallback voice configured ({other_fallback}). "
+                f"Edit or delete that row instead of adding another — only one fallback per primary voice "
+                f"is supported."
+            )
+
+        if self.primary_voice.provider == self.provider:
+            raise ValidationError("Fallback voice must use a different provider than the primary voice.")
+
+        if self.language != self.primary_voice.language:
+            raise ValidationError(
+                f"Fallback voice language ({self.language!r}) must match the primary voice's "
+                f"language ({self.primary_voice.language!r})."
+            )
 
     def save(self, *args, **kwargs):
 
         if self.other_params == "null":
             self.other_params = None
 
+        self.is_fallback = bool(self.primary_voice_id)
+
+        # A fallback config row mirrors its primary row's type/bot — language is
+        # entered explicitly and validated (see clean()) to match the primary's.
+        if self.primary_voice_id:
+            self.type = self.primary_voice.type
+            self.company_bot_id = self.primary_voice.company_bot_id
+
         defaults = VOICE_PROVIDER_DEFAULTS.get(self.provider, {}).get(self.type, {})
 
         if self.pk:
-            old = Voice.objects.filter(pk=self.pk).first()
+            old = Voice.all_voices.filter(pk=self.pk).first()
 
             # If provider or type changed → reset config
             if old and (old.provider != self.provider or old.type != self.type):
@@ -388,6 +456,15 @@ class Voice(models.Model):
         super().save(*args, **kwargs)
 
     class Meta:
+        # validate_unique() (and other Django internals) use _default_manager, not
+        # _base_manager, to exclude "self" from conflict checks — if that manager
+        # is the filtered one, a fallback row (excluded from it) can never exclude
+        # itself, producing bogus "not a valid choice" errors on an untouched save.
+        # Both must point at the unfiltered manager for Voice's internals to work
+        # correctly; application code should still use the explicit `objects` /
+        # `all_voices` manager names, which are unaffected by these Meta options.
+        default_manager_name = 'all_voices'
+        base_manager_name = 'all_voices'
         indexes = [
             models.Index(fields=['company_bot']),
             models.Index(fields=['created_at']),

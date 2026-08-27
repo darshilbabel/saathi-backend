@@ -33,7 +33,7 @@ class CompanyBotResource(resources.ModelResource):
 
     def dehydrate_voices(self, bot):
         """Export Voice objects related to this bot"""
-        voices = Voice.objects.filter(company_bot=bot)
+        voices = Voice.all_voices.filter(company_bot=bot)
         voice_data = []
         for voice in voices:
             voice_dict = {
@@ -95,7 +95,7 @@ class CompanyBotResource(resources.ModelResource):
                 voices_data = json.loads(row['voices'])
                 # Delete existing voices if updating
                 if not new:
-                    Voice.objects.filter(company_bot=instance).delete()
+                    Voice.all_voices.filter(company_bot=instance).delete()
 
                 for voice_dict in voices_data:
                     # Skip if essential fields are missing

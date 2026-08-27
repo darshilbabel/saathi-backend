@@ -61,9 +61,15 @@ def call_ai4bharat_translation_api(voice_provider, source_language, target_langu
                     'status': 200,
                     'content': translated_message
                 }
+            logger.error(f"Malformed response from AI4Bharat Text Translation: {translated_data}")
+            return {
+                'status': 500,
+                'content': "Malformed response from AI4Bharat translation API"
+            }
+        logger.error(f"AI4Bharat Text Translation returned status {response.status_code}: {response.text}")
         return {
-            'status': 200,
-            'content': message_body
+            'status': response.status_code,
+            'content': f"AI4Bharat translation API returned {response.status_code}: {response.text}"
         }
     except Exception as e:
         logger.error('Error processing: %s', e, exc_info=True)

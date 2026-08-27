@@ -46,9 +46,18 @@ class CompanyStateMachineAdmin(admin.TabularInline):
 class VoiceProviderAdmin(admin.TabularInline):
     model = Voice
     extra = 1
+    fk_name = 'company_bot'
+    fields = (
+        'type', 'provider', 'name', 'sample_link', 'language', 'provider_code', 'gender', 'voice_speed',
+        'other_params',
+    )
 
     def get_queryset(self, request):
-        qs = super().get_queryset(request)
+        # Explicitly use the filtered manager (not super()/the default manager,
+        # which Meta.default_manager_name points at the unfiltered one for
+        # Django-internal reasons — see Voice.Meta) so this table only ever
+        # shows real/primary provider rows, not fallback configs.
+        qs = Voice.objects.get_queryset()
         return qs.order_by('type', 'language')
 
     def formfield_for_dbfield(self, db_field, request, **kwargs):
@@ -56,6 +65,53 @@ class VoiceProviderAdmin(admin.TabularInline):
             kwargs["help_text"] = "Leave empty to auto-load provider defaults."
 
         return super().formfield_for_dbfield(db_field, request, **kwargs)
+
+
+class FallbackVoiceProviderAdmin(admin.TabularInline):
+    """
+    A separate section from VoiceProviderAdmin above: each row here is a fallback
+    provider config, explicitly mapped (via the "Primary Voice" dropdown, labeled
+    "provider - type - language" so it's clear which row you're picking) to one
+    of the Text To Text rows in the section above. Retried once if that primary
+    row's provider errors. type/company_bot are mirrored automatically from the
+    chosen primary row (see Voice.save()); language must be entered explicitly
+    and is validated (see Voice.clean()) to match the primary row's language.
+    """
+    model = Voice
+    fk_name = 'company_bot'
+    extra = 1
+    verbose_name = "Fallback Voice Provider"
+    verbose_name_plural = "Fallback Voice Providers (mapped to a Text To Text row above)"
+    fields = (
+        'primary_voice', 'language', 'provider', 'name', 'sample_link', 'provider_code', 'gender',
+        'voice_speed', 'other_params',
+    )
+
+    def get_queryset(self, request):
+        # Fallback rows are excluded from the default manager (so the many other
+        # Voice lookups across the app never resolve to one) — use the unfiltered
+        # manager here so this section can find/display its own rows.
+        qs = Voice.all_voices.filter(is_fallback=True)
+        return qs.order_by('language')
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        if db_field.name == "other_params":
+            kwargs["help_text"] = "Leave empty to auto-load provider defaults."
+
+        return super().formfield_for_dbfield(db_field, request, **kwargs)
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == "primary_voice":
+            object_id = request.resolver_match.kwargs.get('object_id')
+            if object_id:
+                # Default manager already excludes fallback rows, so this only
+                # ever offers real Text To Text provider rows as valid targets.
+                kwargs["queryset"] = Voice.objects.filter(
+                    company_bot_id=object_id, type=VoiceType.TextToText,
+                )
+            else:
+                kwargs["queryset"] = Voice.objects.none()
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
 
 class CompanyAdmin(admin.ModelAdmin):
@@ -125,7 +181,7 @@ class CompanyBotAdmin(BatchUploadMixin, SimpleHistoryAdmin):
     search_fields = ('name', 'company__name')
     date_hierarchy = 'created_at'
     ordering = ('-created_at',)
-    inlines = [VoiceProviderAdmin]
+    inlines = [VoiceProviderAdmin, FallbackVoiceProviderAdmin]
     actions = ['duplicate_bot', 'export_selected_bots']
 
     # Hidden from the add/change form in favor of gateway_provider/gateway_model — the
@@ -138,6 +194,28 @@ class CompanyBotAdmin(BatchUploadMixin, SimpleHistoryAdmin):
 
     import_template_name = 'admin/import_export/import.html'
     export_template_name = 'admin/import_export/export.html'
+
+    def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
+        # Surface inline validation errors (e.g. Voice.clean() messages) as
+        # top-of-page messages too — the jazzmin theme doesn't reliably render
+        # inline formset non-field/non-form errors down at the form itself,
+        # so without this an admin only sees a generic "correct the error
+        # below" banner with no indication of what actually went wrong.
+        seen = set()
+        for inline_admin_formset in context.get('inline_admin_formsets', []):
+            formset = inline_admin_formset.formset
+            label = inline_admin_formset.opts.verbose_name
+            for error in formset.non_form_errors():
+                if (label, str(error)) not in seen:
+                    seen.add((label, str(error)))
+                    messages.error(request, f"{label}: {error}")
+            for form in formset.forms:
+                for field, field_errors in form.errors.items():
+                    for error in field_errors:
+                        if (label, str(error)) not in seen:
+                            seen.add((label, str(error)))
+                            messages.error(request, f"{label}: {error}")
+        return super().render_change_form(request, context, add=add, change=change, form_url=form_url, obj=obj)
 
     def get_urls(self):
         urls = super().get_urls()
@@ -305,15 +383,15 @@ class CompanyBotAdmin(BatchUploadMixin, SimpleHistoryAdmin):
             obj = self.model.objects.get(pk=object_id)
             if obj.bot_type == CompanyBotTypeChoices.STATE_MACHINE:
                 # If the bot_type is 'state machine', include the inline.
-                self.inlines = [VoiceProviderAdmin, CompanyStateMachineAdmin]
+                self.inlines = [VoiceProviderAdmin, FallbackVoiceProviderAdmin, CompanyStateMachineAdmin]
 
             else:
                 # Otherwise, no inlines.
-                self.inlines = [VoiceProviderAdmin]
+                self.inlines = [VoiceProviderAdmin, FallbackVoiceProviderAdmin]
         else:
             # For the add form, decide if you want the inline to be shown or not.
             # This example assumes not.
-            self.inlines = [VoiceProviderAdmin]
+            self.inlines = [VoiceProviderAdmin, FallbackVoiceProviderAdmin]
         return super().changeform_view(request, object_id, form_url, extra_context)
 
     # Sync Google glossary for TextToText voice providers after inline save
@@ -382,12 +460,27 @@ class CompanyBotAdmin(BatchUploadMixin, SimpleHistoryAdmin):
         new_bot.name = f"{original.name} (Copy)"
         new_bot.save()
 
-        # Duplicate VoiceProvider inlines
-        original_voice_providers = Voice.objects.filter(company_bot=original)
+        # Duplicate VoiceProvider inlines (including fallback config rows), remapping
+        # primary_voice to the corresponding clone instead of leaving it pointing
+        # at a row that still belongs to the original bot.
+        original_voice_providers = list(Voice.all_voices.filter(company_bot=original))
+        primary_map = {voice.pk: voice.primary_voice_id for voice in original_voice_providers}
+        old_to_new_pk = {}
         for voice in original_voice_providers:
+            old_pk = voice.pk
             voice.pk = None
+            voice.primary_voice = None
             voice.company_bot = new_bot
             voice.save()
+            old_to_new_pk[old_pk] = voice.pk
+
+        for old_pk, old_primary_id in primary_map.items():
+            if old_primary_id and old_primary_id in old_to_new_pk:
+                # Bypasses save(), so is_fallback (normally auto-derived there) is
+                # set explicitly here too.
+                Voice.all_voices.filter(pk=old_to_new_pk[old_pk]).update(
+                    primary_voice_id=old_to_new_pk[old_primary_id], is_fallback=True,
+                )
 
         # Duplicate StateMachine if present
         if original.bot_type == CompanyBotTypeChoices.STATE_MACHINE:

@@ -108,7 +108,7 @@ def export_bots_json(bots):
         bot_data['company_slug'] = bot.company.slug
         # Add voices
         voice_data=[]
-        voices = bot.voice_set.all()
+        voices = Voice.all_voices.filter(company_bot=bot)
         for v in voices:
             voice_data.append(model_to_dict(v, exclude=['id', 'company_bot', 'created_at', 'updated_at']))
         bot_data['voices'] = voice_data
@@ -234,7 +234,7 @@ def import_bots_json(request, uploaded_file):
                     created_count += 1
 
                 # Delete existing inline records
-                Voice.objects.filter(company_bot=bot).delete()
+                Voice.all_voices.filter(company_bot=bot).delete()
                 CompanyStateMachine.objects.filter(company_bot=bot).delete()
                 BotVernacular.objects.filter(company_bot=bot).delete()
 

@@ -182,6 +182,11 @@ class BaseResponseHandlerNew(ABC):
             state_machine = CompanyStateMachine.objects.get(
                 company_bot=company_bot, step=chat_session.current_step
             )
+        except CompanyStateMachine.DoesNotExist:
+            # Expected for non-state-machine bots (e.g. SIMPLE) — they have no
+            # per-step CompanyStateMachine row, so this just means no state
+            # machine tool_context applies here.
+            pass
         except Exception as e:
             logger.error(f"Error getting state machine for tools: {e}")
 

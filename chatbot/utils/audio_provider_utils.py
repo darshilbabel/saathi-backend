@@ -86,14 +86,14 @@ def get_voice_provider(company_bot, voice_type, source_language=None, target_lan
         else "en"
     )
 
-    voice = Voice.objects.filter(
+    voice = Voice.objects.select_related('fallback_config').filter(
         company_bot=company_bot,
         type=voice_type,
         language=language,
     ).first()
 
     if not voice and language != "en":
-        voice = Voice.objects.filter(
+        voice = Voice.objects.select_related('fallback_config').filter(
             company_bot=company_bot,
             type=voice_type,
             language="en",
@@ -335,6 +335,43 @@ def speech_text_provider(company_bot, base64, audio_format, source_language):
     return response
 
 
+def _dispatch_translation(voice_provider, message_body, target_language, source_language, company_bot):
+    if voice_provider.provider == VoiceProvider.AI4Bharat:
+        return call_ai4bharat_translation_api(
+            source_language=source_language, target_language=target_language, message_body=message_body,
+            voice_provider=voice_provider
+        )
+    elif voice_provider.provider == VoiceProvider.GOOGLE:
+        secret = settings.SECRETS
+        return translate_text(
+            project_id=secret.get('project_id'), text=message_body,
+            source_language_code=LanguageMapping.get_google_translate_language(source_language),
+            target_language_code=LanguageMapping.get_google_translate_language(target_language),
+            voice_provider=voice_provider
+        )
+    elif voice_provider.provider == VoiceProvider.SARVAM:
+        service = SarvamLanguageService()
+        return service.translate(
+            input_text=message_body,
+            source_lang=LanguageMapping.get_sarvam_language(source_language),
+            target_lang=LanguageMapping.get_sarvam_language(target_language),
+            voice_provider=voice_provider
+        )
+    elif voice_provider.provider == VoiceProvider.CUSTOM_LLM:
+        other = getattr(voice_provider, "other_params", {}) or {}
+        route = other.get('route', "/transliterate_text")
+        route_company_bot = CompanyBot.objects.filter(route=route).first()
+        return handle_custom_translation(
+            message_body=message_body, source_language=LanguageMapping.get_mapped_language(source_language),
+            target_language=LanguageMapping.get_mapped_language(target_language), company_bot=route_company_bot
+        )
+    else:
+        return {
+            'status': 500,
+            'content': "No provider found!"
+        }
+
+
 def text_translate_provider(message_body, target_language, source_language, voice_provider=None, company_bot=None):
     try:
         if not voice_provider and company_bot:
@@ -342,42 +379,27 @@ def text_translate_provider(message_body, target_language, source_language, voic
                 company_bot=company_bot, voice_type=VoiceType.TextToText, source_language=source_language,
                 target_language=target_language
             )
-        if voice_provider.provider == VoiceProvider.AI4Bharat:
-            response = call_ai4bharat_translation_api(
-                source_language=source_language, target_language=target_language, message_body=message_body,
-                voice_provider=voice_provider
-            )
-        elif voice_provider.provider == VoiceProvider.GOOGLE:
-            secret = settings.SECRETS
-            response = translate_text(
-                project_id=secret.get('project_id'), text=message_body,
-                source_language_code=LanguageMapping.get_google_translate_language(source_language),
-                target_language_code=LanguageMapping.get_google_translate_language(target_language),
-                voice_provider=voice_provider
-            )
-        elif voice_provider.provider == VoiceProvider.SARVAM:
-            service = SarvamLanguageService()
-            response = service.translate(
-                input_text=message_body,
-                source_lang=LanguageMapping.get_sarvam_language(source_language),
-                target_lang=LanguageMapping.get_sarvam_language(target_language),
-                voice_provider=voice_provider
-            )
-        elif voice_provider.provider == VoiceProvider.CUSTOM_LLM:
-            other = getattr(voice_provider, "other_params", {}) or {}
-            route = other.get('route', "/transliterate_text")
-            company_bot = CompanyBot.objects.filter(route=route).first()
-            response = handle_custom_translation(
-                message_body=message_body, source_language=LanguageMapping.get_mapped_language(source_language),
-                target_language=LanguageMapping.get_mapped_language(target_language), company_bot=company_bot
-            )
-        else:
+        if not voice_provider:
             return {
                 'status': 500,
                 'content': "No provider found!"
             }
+
+        response = _dispatch_translation(voice_provider, message_body, target_language, source_language, company_bot)
+
+        fallback = getattr(voice_provider, 'fallback_config', None)
+        if response.get('status') != 200 and fallback:
+            logger.info(
+                "Primary translation provider %s failed for Voice id=%s (%s); trying fallback provider %s",
+                voice_provider.provider, voice_provider.pk, response.get('content'), fallback.provider
+            )
+            response = _dispatch_translation(
+                fallback, message_body, target_language, source_language, company_bot
+            )
+
         return response
     except Exception as e:
+        logger.error("text_translate_provider failed: %s", e, exc_info=True)
         return {
             'status': 500,
             'content': str(e)

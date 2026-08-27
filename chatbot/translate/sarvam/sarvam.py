@@ -70,11 +70,13 @@ class SarvamLanguageService:
                 index = futures[future]
                 results[index] = future.result()
 
-        return " ".join(results)
+        texts, oks = zip(*results) if results else ([], [])
+        return " ".join(texts), all(oks)
 
     def _execute_text_task(
             self, method_name, response_attr, chunks, base_kwargs_builder, extra_kwargs=None,
     ):
+        """Returns (joined_text, all_chunks_succeeded)."""
         try:
             extra_kwargs = extra_kwargs or {}
 
@@ -100,11 +102,11 @@ class SarvamLanguageService:
                     response = method(**kwargs)
                     logger.info(f"Response {response}")
 
-                    return getattr(response, response_attr, chunk)
+                    return getattr(response, response_attr, chunk), True
 
                 except Exception:
                     logger.error(f"{method_name} error")
-                    return chunk
+                    return chunk, False
 
             return self._process_in_parallel(chunks, worker)
 
@@ -126,19 +128,20 @@ class SarvamLanguageService:
                 "target_language_code": target_lang,
             }
 
+        content, ok = self._execute_text_task(
+            method_name="transliterate",
+            response_attr="transliterated_text",
+            chunks=chunks,
+            base_kwargs_builder=base_kwargs_builder,
+            extra_kwargs={
+                "numerals_format": other.get("numerals_format"),
+                "spoken_form": other.get("spoken_form"),
+                "spoken_form_numerals_language": other.get("spoken_form_numerals_language"),
+            },
+        )
         return {
-            "status": 200,
-            "content": self._execute_text_task(
-                method_name="transliterate",
-                response_attr="transliterated_text",
-                chunks=chunks,
-                base_kwargs_builder=base_kwargs_builder,
-                extra_kwargs={
-                    "numerals_format": other.get("numerals_format"),
-                    "spoken_form": other.get("spoken_form"),
-                    "spoken_form_numerals_language": other.get("spoken_form_numerals_language"),
-                },
-            ),
+            "status": 200 if ok else 500,
+            "content": content,
         }
 
     def translate(self, input_text, source_lang, target_lang, max_chars=990, voice_provider=None):
@@ -155,18 +158,19 @@ class SarvamLanguageService:
                 "speaker_gender": gender,
             }
 
+        content, ok = self._execute_text_task(
+            method_name="translate",
+            response_attr="translated_text",
+            chunks=chunks,
+            base_kwargs_builder=base_kwargs_builder,
+            extra_kwargs={
+                "model": other.get("model"),
+                "mode": other.get("mode"),
+                "output_script": other.get("output_script"),
+                "numerals_format": other.get("numerals_format"),
+            },
+        )
         return {
-            "status": 200,
-            "content": self._execute_text_task(
-                method_name="translate",
-                response_attr="translated_text",
-                chunks=chunks,
-                base_kwargs_builder=base_kwargs_builder,
-                extra_kwargs={
-                    "model": other.get("model"),
-                    "mode": other.get("mode"),
-                    "output_script": other.get("output_script"),
-                    "numerals_format": other.get("numerals_format"),
-                },
-            ),
+            "status": 200 if ok else 500,
+            "content": content,
         }
