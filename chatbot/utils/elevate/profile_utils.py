@@ -16,6 +16,17 @@ def _safe_body(response):
         return '<unreadable>'
 
 
+def _parse_error_body(response):
+    try:
+        error_body = response.json()
+    except ValueError:
+        error_body = {}
+    return {
+        'message': error_body.get('message') or _safe_body(response),
+        'errors': error_body.get('error'),
+    }
+
+
 def fetch_elevate_user(access_token):
     """HTTP-only fetch from Elevate. No DB access."""
     try:
@@ -30,11 +41,11 @@ def fetch_elevate_user(access_token):
 
         if response.status_code == 401:
             logger.error('[fetch_elevate_user] unauthorized — token invalid or expired body=%s', _safe_body(response))
-            return {'error': 'unauthorized', 'status_code': 401}
+            return {'error': 'unauthorized', 'status_code': 401, **_parse_error_body(response)}
 
         if response.status_code >= 500:
             logger.error('[fetch_elevate_user] Elevate server error status=%s body=%s', response.status_code, _safe_body(response))
-            return {'error': 'elevate_server_error', 'status_code': response.status_code}
+            return {'error': 'elevate_server_error', 'status_code': response.status_code, **_parse_error_body(response)}
 
         response.raise_for_status()
 
@@ -94,7 +105,7 @@ def fetch_elevate_user(access_token):
     except Exception as e:
         logger.error('[fetch_elevate_user] unexpected error: %s', e, exc_info=True)
 
-    return {}
+    return {'error': 'elevate_server_error'}
 
 
 def upsert_elevate_profile(user_data):
@@ -106,10 +117,15 @@ def upsert_elevate_profile(user_data):
     userid = user_data['userid']
     language = user_data['language']
 
-    profile, created = Profile.objects.update_or_create(
-        userid=userid,
-        defaults={'source': 'elevate'}
-    )
+    try:
+        profile, created = Profile.objects.update_or_create(
+            userid=userid,
+            defaults={'source': 'elevate'}
+        )
+    except Exception as e:
+        logger.error('[upsert_elevate_profile] DB error for userid=%s: %s', userid, e, exc_info=True)
+        return {'error': 'internal_error', 'status_code': 500}
+
     logger.info('[upsert_elevate_profile] profile %s userid=%s', 'created' if created else 'updated', userid)
 
     return {
@@ -147,11 +163,11 @@ def logout_elevate_user(access_token, refresh_token):
 
         if response.status_code == 401:
             logger.error('[logout_elevate_user] unauthorized — token invalid or expired body=%s', _safe_body(response))
-            return {'error': 'unauthorized', 'status_code': 401}
+            return {'error': 'unauthorized', 'status_code': 401, **_parse_error_body(response)}
 
         if response.status_code >= 500:
             logger.error('[logout_elevate_user] Elevate server error status=%s body=%s', response.status_code, _safe_body(response))
-            return {'error': 'elevate_server_error', 'status_code': response.status_code}
+            return {'error': 'elevate_server_error', 'status_code': response.status_code, **_parse_error_body(response)}
 
         response.raise_for_status()
 
@@ -207,24 +223,15 @@ def update_elevate_profile(access_token, name=_UNSET, role=_UNSET, school_name=_
 
         if response.status_code == 401:
             logger.error('[update_elevate_profile] unauthorized — token invalid or expired body=%s', _safe_body(response))
-            return {'error': 'unauthorized', 'status_code': 401}
+            return {'error': 'unauthorized', 'status_code': 401, **_parse_error_body(response)}
 
         if response.status_code >= 500:
             logger.error('[update_elevate_profile] Elevate server error status=%s body=%s', response.status_code, _safe_body(response))
-            return {'error': 'elevate_server_error', 'status_code': response.status_code}
+            return {'error': 'elevate_server_error', 'status_code': response.status_code, **_parse_error_body(response)}
 
         if response.status_code >= 400:
             logger.error('[update_elevate_profile] Elevate client error status=%s body=%s', response.status_code, _safe_body(response))
-            try:
-                error_body = response.json()
-            except ValueError:
-                error_body = {}
-            return {
-                'error': 'elevate_client_error',
-                'status_code': response.status_code,
-                'message': error_body.get('message') or _safe_body(response),
-                'errors': error_body.get('error'),
-            }
+            return {'error': 'elevate_client_error', 'status_code': response.status_code, **_parse_error_body(response)}
 
         response.raise_for_status()
 

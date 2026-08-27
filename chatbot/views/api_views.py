@@ -229,14 +229,16 @@ def get_profile_view(request):
             logger.error('[get_profile_view] Elevate auth failure')
             return Response({
                 'status': 'error',
-                'message': 'Unauthorized.'
+                'message': elevate_user_data.get('message') or 'Unauthorized.',
+                'errors': elevate_user_data.get('errors'),
             }, status=elevate_user_data.get('status_code'))
 
         if elevate_user_data.get('error') == 'elevate_server_error':
             logger.error('[get_profile_view] Elevate server error')
             return Response({
                 'status': 'error',
-                'message': 'Elevate service unavailable.'
+                'message': elevate_user_data.get('message') or 'Elevate service unavailable.',
+                'errors': elevate_user_data.get('errors'),
             }, status=elevate_user_data.get('status_code') or 502)
 
         is_tnc_accepted = elevate_user_data.get('has_accepted_tnc', False)
@@ -305,7 +307,8 @@ def accept_tnc_view(request):
             logger.error('[accept_tnc_view] Elevate auth failure')
             return Response({
                 'status': 'error',
-                'message': 'Unauthorized.'
+                'message': result.get('message') or 'Unauthorized.',
+                'errors': result.get('errors'),
             }, status=result.get('status_code'))
 
         if result.get('error') == 'elevate_client_error':
@@ -320,7 +323,8 @@ def accept_tnc_view(request):
             logger.error('[accept_tnc_view] Elevate server error')
             return Response({
                 'status': 'error',
-                'message': 'Elevate service unavailable.'
+                'message': result.get('message') or 'Elevate service unavailable.',
+                'errors': result.get('errors'),
             }, status=result.get('status_code') or 502)
 
         return Response({
@@ -363,7 +367,8 @@ def update_profile_view(request):
             logger.error('[update_profile_view] Elevate auth failure')
             return Response({
                 'status': 'error',
-                'message': 'Unauthorized.'
+                'message': result.get('message') or 'Unauthorized.',
+                'errors': result.get('errors'),
             }, status=result.get('status_code'))
 
         if result.get('error') == 'elevate_client_error':
@@ -378,7 +383,8 @@ def update_profile_view(request):
             logger.error('[update_profile_view] Elevate server error')
             return Response({
                 'status': 'error',
-                'message': 'Elevate service unavailable.'
+                'message': result.get('message') or 'Elevate service unavailable.',
+                'errors': result.get('errors'),
             }, status=result.get('status_code') or 502)
 
         logger.info('[update_profile_view] updated fields=%s', list(update_fields))
@@ -397,34 +403,44 @@ def update_profile_view(request):
 
 @api_view(['POST'])
 def logout_profile(request):
-    access_token = request.COOKIES.get(ACCESS_TOKEN_COOKIE_KEY) if ACCESS_TOKEN_COOKIE_KEY else None
-    if not access_token:
-        access_token = request.headers.get('X-auth-token')
+    try:
+        access_token = request.COOKIES.get(ACCESS_TOKEN_COOKIE_KEY) if ACCESS_TOKEN_COOKIE_KEY else None
+        if not access_token:
+            access_token = request.headers.get('X-auth-token')
 
-    refresh_token = request.COOKIES.get(REFRESH_TOKEN_COOKIE_KEY) if REFRESH_TOKEN_COOKIE_KEY else None
-    if not refresh_token:
-        refresh_token = request.headers.get('X-refresh-token')
+        refresh_token = request.COOKIES.get(REFRESH_TOKEN_COOKIE_KEY) if REFRESH_TOKEN_COOKIE_KEY else None
+        if not refresh_token:
+            refresh_token = request.headers.get('X-refresh-token')
 
-    logout_result = logout_elevate_user(access_token=access_token, refresh_token=refresh_token)
+        logout_result = logout_elevate_user(access_token=access_token, refresh_token=refresh_token)
 
-    if logout_result.get('error') == 'unauthorized':
-        logger.error('[logout_elevate_profile] Elevate auth failure')
+        if logout_result.get('error') == 'unauthorized':
+            logger.error('[logout_elevate_profile] Elevate auth failure')
+            return Response({
+                'status': 'error',
+                'message': logout_result.get('message') or 'Unauthorized.',
+                'errors': logout_result.get('errors'),
+            }, status=logout_result.get('status_code'))
+
+        if logout_result.get('error') == 'elevate_server_error':
+            logger.error('[logout_elevate_profile] Elevate server error')
+            return Response({
+                'status': 'error',
+                'message': logout_result.get('message') or 'Elevate service unavailable.',
+                'errors': logout_result.get('errors'),
+            }, status=logout_result.get('status_code') or 502)
+
+        logger.info('[logout_elevate_profile] logout successful')
+        response = Response({'status': 'ok'}, status=200)
+        if ACCESS_TOKEN_COOKIE_KEY:
+            response.delete_cookie(ACCESS_TOKEN_COOKIE_KEY)
+        if REFRESH_TOKEN_COOKIE_KEY:
+            response.delete_cookie(REFRESH_TOKEN_COOKIE_KEY)
+        return response
+
+    except Exception:
+        logger.error('[logout_profile] unexpected error', exc_info=True)
         return Response({
             'status': 'error',
-            'message': 'Unauthorized.'
-        }, status=logout_result.get('status_code'))
-
-    if logout_result.get('error') == 'elevate_server_error':
-        logger.error('[logout_elevate_profile] Elevate server error')
-        return Response({
-            'status': 'error',
-            'message': 'Elevate service unavailable.'
-        }, status=logout_result.get('status_code') or 502)
-
-    logger.info('[logout_elevate_profile] logout successful')
-    response = Response({'status': 'ok'}, status=200)
-    if ACCESS_TOKEN_COOKIE_KEY:
-        response.delete_cookie(ACCESS_TOKEN_COOKIE_KEY)
-    if REFRESH_TOKEN_COOKIE_KEY:
-        response.delete_cookie(REFRESH_TOKEN_COOKIE_KEY)
-    return response
+            'message': 'Internal server error.'
+        }, status=500)
