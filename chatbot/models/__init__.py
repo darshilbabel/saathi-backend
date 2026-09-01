@@ -6,5 +6,6 @@ from .bot_vernacular_model import *
 from .media_models import *
 from .theme_models import *
 from .profile_models import *
+from .language_provider_models import *
 from .company_models import *
 from .i18n_models import *

@@ -1,13 +1,13 @@
 from django.contrib import admin
+from django.core.exceptions import ValidationError
 from django.db.models import OuterRef, Q, Subquery
-from pydantic import ValidationError
 from simple_history.admin import SimpleHistoryAdmin
 from .generic_upload_admin import BatchUploadMixin
 from chatbot.filter.admin_filter import (CompanyChatCompanyFilter, ChatSessionFilter,
                                          ProfileCompanyChatFilter, ProfileEmailFilter)
 from chatbot.filter.custom_date_from_filter import CustomAdvanceDateFilter
 from chatbot.models import Company, Profile, ProfileType, CompanyBot, CompanyChat, CompanyChatFeedback, \
-    ChatSession, CompanyBotTypeChoices, Voice, VoiceProvider, VoiceType, ImageConfiguration, Flow
+    ChatSession, CompanyBotTypeChoices, Voice, VoiceProvider, VoiceType, ImageConfiguration, Flow, Language
 from chatbot.models.company_models import CompanyStateMachine
 from chatbot.resources.resource import CompanyChatResource
 from chatbot.resources.company_resource import ChatSessionResource
@@ -48,8 +48,8 @@ class VoiceProviderAdmin(admin.TabularInline):
     extra = 1
     fk_name = 'company_bot'
     fields = (
-        'type', 'provider', 'name', 'sample_link', 'language', 'provider_code', 'gender', 'voice_speed',
-        'other_params',
+        'type', 'language_ref', 'provider_ref', 'name', 'sample_link',
+        'provider_code', 'gender', 'voice_speed', 'other_params',
     )
 
     def get_queryset(self, request):
@@ -58,7 +58,7 @@ class VoiceProviderAdmin(admin.TabularInline):
         # Django-internal reasons — see Voice.Meta) so this table only ever
         # shows real/primary provider rows, not fallback configs.
         qs = Voice.objects.get_queryset()
-        return qs.order_by('type', 'language')
+        return qs.order_by('type', 'language_ref__name')
 
     def formfield_for_dbfield(self, db_field, request, **kwargs):
         if db_field.name == "other_params":
@@ -83,8 +83,8 @@ class FallbackVoiceProviderAdmin(admin.TabularInline):
     verbose_name = "Fallback Voice Provider"
     verbose_name_plural = "Fallback Voice Providers (mapped to a Text To Text row above)"
     fields = (
-        'primary_voice', 'language', 'provider', 'name', 'sample_link', 'provider_code', 'gender',
-        'voice_speed', 'other_params',
+        'primary_voice', 'language_ref', 'provider_ref', 'name', 'sample_link',
+        'provider_code', 'gender', 'voice_speed', 'other_params',
     )
 
     def get_queryset(self, request):
@@ -92,7 +92,7 @@ class FallbackVoiceProviderAdmin(admin.TabularInline):
         # Voice lookups across the app never resolve to one) — use the unfiltered
         # manager here so this section can find/display its own rows.
         qs = Voice.all_voices.filter(is_fallback=True)
-        return qs.order_by('language')
+        return qs.order_by('language_ref__name')
 
     def formfield_for_dbfield(self, db_field, request, **kwargs):
         if db_field.name == "other_params":
@@ -709,22 +709,12 @@ class ImageConfigurationAdmin(admin.ModelAdmin):
         return f"{obj.image_size / 1048576:.2f} MB"
     get_image_size_mb.short_description = 'Max Image Size'
 
-LANGUAGE_CHOICES = [
-    ("en", "English"),
-    ("hi", "Hindi"),
-    ("kn", "Kannada"),
-    ("te", "Telugu"),
-    ("or", "Odia"),
-    ("ta", "Tamil"),
-]
-
-
 class FlowAdminForm(ModelForm):
     languages = MultipleChoiceField(
-        choices=LANGUAGE_CHOICES,
         required=False,
         widget=CheckboxSelectMultiple,
-        help_text="Select one or more supported languages."
+        help_text="Select one or more supported languages. To add a language not listed here, "
+                   "create it under Chatbot > Languages first.",
     )
 
     class Meta:
@@ -733,6 +723,10 @@ class FlowAdminForm(ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+        # Built fresh per request (not a module-level constant) so a Language added via its
+        # own admin page shows up here immediately, with no code change.
+        self.fields["languages"].choices = list(Language.objects.values_list('iso_code', 'name'))
 
         value = self.instance.languages if self.instance and self.instance.pk else None
         self.fields["languages"].initial = value or ["en", "hi", "kn", "te"]
@@ -746,7 +740,7 @@ class FlowAdminForm(ModelForm):
         if len(value) != len(set(value)):
             raise ValidationError("Language codes must be unique.")
 
-        allowed = {code for code, _ in LANGUAGE_CHOICES}
+        allowed = set(Language.objects.values_list('iso_code', flat=True))
         invalid = [code for code in value if code not in allowed]
         if invalid:
             raise ValidationError(f"Invalid language codes: {', '.join(invalid)}")

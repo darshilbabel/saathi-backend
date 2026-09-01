@@ -1,7 +1,11 @@
 import json
+import logging
 from import_export import resources, fields
 from import_export.widgets import ForeignKeyWidget
-from chatbot.models import CompanyBot, Voice, CompanyStateMachine, Company, VoiceType
+from chatbot.constants.provider_slugs import VOICE_PROVIDER_TO_SLUG
+from chatbot.models import CompanyBot, Voice, CompanyStateMachine, Company, VoiceType, Language, Provider
+
+logger = logging.getLogger('django')
 
 
 class CompanyBotResource(resources.ModelResource):
@@ -90,9 +94,26 @@ class CompanyBotResource(resources.ModelResource):
             if row[field] == '':
                 row[field] = None
 
-    def after_import_instance(self, instance, new, **kwargs):
-        """Handle related models after the main instance is imported"""
-        row = kwargs.get('row', {})
+    def after_import_row(self, row, row_result, **kwargs):
+        """Handle related models after the main instance has been imported and saved.
+
+        NOTE: django-import-export 4.x no longer calls the old after_import_instance(instance,
+        new, **kwargs) hook that this method used to be named (import_row() only calls the
+        deprecated shim if a subclass overrides the OLD name, and that shim itself forwards to
+        after_init_instance(instance, new, row=None, ...) — which fires before the instance is
+        saved, too early for the FK-to-instance.pk writes this method does below). This
+        resource previously still used the old name, so this whole voices/state_machines
+        import path was silently never invoked; fixed here (moved to after_import_row, which
+        fires post-save) since it's directly adjacent to the FK-resolution change this method
+        needed anyway (voices import now requires a resolved Language/Provider).
+        """
+        if row_result.import_type not in (row_result.IMPORT_TYPE_NEW, row_result.IMPORT_TYPE_UPDATE):
+            return
+        instance = CompanyBot.objects.filter(pk=row_result.object_id).first()
+        if not instance:
+            return
+        new = row_result.import_type == row_result.IMPORT_TYPE_NEW
+        row = row or {}
 
         # Import Voice objects
         if 'voices' in row and row['voices']:
@@ -112,12 +133,34 @@ class CompanyBotResource(resources.ModelResource):
                 primary_voices_data = [v for v in voices_data if not v.get('primary_voice_language')]
                 fallback_voices_data = [v for v in voices_data if v.get('primary_voice_language')]
 
+                def _resolve_language(language_code):
+                    if not language_code:
+                        return None
+                    return Language.objects.filter(iso_code=language_code).first()
+
+                def _resolve_provider(provider_enum_value):
+                    if not provider_enum_value:
+                        return None
+                    slug = VOICE_PROVIDER_TO_SLUG.get(provider_enum_value)
+                    return Provider.objects.filter(slug=slug).first() if slug else None
+
                 def _create_voice(voice_dict, primary_voice=None):
+                    language_ref = _resolve_language(voice_dict.get('language'))
+                    provider_ref = _resolve_provider(voice_dict.get('provider'))
+                    if not language_ref or not provider_ref:
+                        logger.warning(
+                            "Skipping voice import for bot %s — could not resolve language %r / provider %r "
+                            "to a seeded Language/Provider row in this environment.",
+                            instance.pk, voice_dict.get('language'), voice_dict.get('provider')
+                        )
+                        return None
                     return Voice.objects.create(
                         company_bot=instance,
                         primary_voice=primary_voice,
                         type=voice_dict.get('type'),
                         provider=voice_dict.get('provider'),
+                        language_ref=language_ref,
+                        provider_ref=provider_ref,
                         name=voice_dict.get('name'),
                         sample_link=voice_dict.get('sample_link'),
                         language=voice_dict.get('language'),

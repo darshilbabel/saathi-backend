@@ -11,6 +11,7 @@ from simple_history.models import HistoricalRecords
 
 from chatbot.constants.tool_definitions import SEARCH_KNOWLEDGE_BASE_TOOL, SEARCH_KNOWLEDGE_BASE_TOOL_NAME
 from chatbot.constants.voice_provider_defaults import get_provider_defaults, VOICE_PROVIDER_DEFAULTS
+from chatbot.constants.provider_slugs import VOICE_PROVIDER_TO_SLUG, SLUG_TO_VOICE_PROVIDER
 from chatbot.models.enums import (
     CreateStoryChoices, EntityStatus, LLMModel, GenderChoices, ChatStatus,
     FeedbackChoices, CompanyBotTypeChoices, CompanyBotDynamicContextType, CompanyChatSourceChoices,
@@ -425,12 +426,27 @@ class Voice(models.Model):
 
     company_bot = models.ForeignKey(CompanyBot, on_delete=models.SET_NULL, null=True, blank=True)
     type = models.CharField(max_length=300, choices=VoiceType.choices, null=True, blank=True)
-    provider = models.CharField(max_length=300, null=True, blank=True,
-                                choices=VoiceProvider.choices, default=VoiceProvider.AI4Bharat)
+    provider = models.CharField(
+        max_length=300, null=True, blank=True, choices=VoiceProvider.choices, default=VoiceProvider.AI4Bharat,
+        help_text="Legacy — frozen, hidden from admin, auto-synced from provider_ref on save(). "
+                   "Kept only for backward compatibility with existing read call sites."
+    )
     name = models.CharField(max_length=100, null=True, blank=True)
     sample_link = models.URLField(null=True, blank=True)
-    language = models.CharField(max_length=100, null=True, blank=True)
+    language = models.CharField(
+        max_length=100, null=True, blank=True,
+        help_text="Legacy — frozen, hidden from admin, auto-synced from language_ref on save(). "
+                   "Kept only for backward compatibility with existing read call sites."
+    )
     provider_code = models.CharField(max_length=100, null=True, blank=True)
+    language_ref = models.ForeignKey(
+        'chatbot.Language', on_delete=models.PROTECT, related_name='voices',
+        help_text="Structured language for this voice config."
+    )
+    provider_ref = models.ForeignKey(
+        'chatbot.Provider', on_delete=models.PROTECT, related_name='voices',
+        help_text="Structured provider for this voice config."
+    )
     gender = models.CharField(max_length=100, choices=GenderChoices.choices, default=GenderChoices.MALE)
     voice_speed = models.FloatField(
         null=True, blank=True, default=1.0,
@@ -457,8 +473,31 @@ class Voice(models.Model):
     def __str__(self):
         return f"{self.get_provider_display()} - {self.get_type_display()} - {self.language}"
 
+    @property
+    def provider_slug(self):
+        """Slug used to key into the provider_dispatch registries — reads provider_ref when set,
+        falling back to mapping the legacy provider enum value for rows not yet backfilled."""
+        if self.provider_ref_id:
+            return self.provider_ref.slug
+        return VOICE_PROVIDER_TO_SLUG.get(self.provider)
+
+    def _sync_legacy_fields_from_refs(self):
+        """Sync legacy language/provider CharFields from language_ref/provider_ref.
+
+        Called from both clean() and save() — clean()'s uniqueness/fallback-match
+        checks below read the legacy `language` field, and clean() runs (via
+        full_clean(), e.g. from admin forms) before save(), so the sync can't only
+        live in save() or those checks would see a stale/blank legacy value for a
+        row created via the FK fields alone.
+        """
+        if self.language_ref_id:
+            self.language = self.language_ref.iso_code
+        if self.provider_ref_id:
+            self.provider = SLUG_TO_VOICE_PROVIDER.get(self.provider_ref.slug, self.provider)
+
     def clean(self):
         super().clean()
+        self._sync_legacy_fields_from_refs()
 
         if not self.primary_voice_id:
             # A primary/non-fallback row — at most one per (company_bot, type,
@@ -508,6 +547,8 @@ class Voice(models.Model):
 
         if self.other_params == "null":
             self.other_params = None
+
+        self._sync_legacy_fields_from_refs()
 
         self.is_fallback = bool(self.primary_voice_id)
 
