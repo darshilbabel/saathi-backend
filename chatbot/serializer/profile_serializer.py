@@ -136,6 +136,7 @@ class CompanyChatFeedbackSerializer(serializers.ModelSerializer):
         thumbs_up = attrs.get('thumbs_up', False)
         thumbs_down = attrs.get('thumbs_down', False)
         has_comment = bool((attrs.get('comment') or '').strip())
+        has_thumbs_key = 'thumbs_up' in self.initial_data or 'thumbs_down' in self.initial_data
 
         # Explicit thumbs decisions are validated here; the comment-only carry-forward
         # case is resolved atomically in create() to avoid a read-then-insert race with
@@ -143,12 +144,12 @@ class CompanyChatFeedbackSerializer(serializers.ModelSerializer):
         if thumbs_up and thumbs_down:
             raise serializers.ValidationError('thumbs_up and thumbs_down cannot both be true.')
 
-        # thumbs_up/thumbs_down default to False, so "both present but false, no comment"
-        # is a no-op submission, not a carry-forward — reject it rather than silently
-        # writing an empty feedback row.
-        if not thumbs_up and not thumbs_down and not has_comment:
+        # An explicit false/false is a valid decision (the user deselected their
+        # feedback) — only reject when neither thumbs key nor a comment was sent at
+        # all, since that request wouldn't carry forward or record anything.
+        if not has_thumbs_key and not has_comment:
             raise serializers.ValidationError(
-                'At least one of thumbs_up, thumbs_down must be true, or a comment must be provided.'
+                'At least one of thumbs_up, thumbs_down must be provided, or a comment must be provided.'
             )
         return attrs
 
