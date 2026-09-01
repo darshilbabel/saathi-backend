@@ -1,3 +1,5 @@
+import json
+import logging
 import os
 from copy import deepcopy
 
@@ -7,6 +9,7 @@ from django.utils import timezone
 from django.core.validators import MinValueValidator, MaxValueValidator
 from simple_history.models import HistoricalRecords
 
+from chatbot.constants.tool_definitions import SEARCH_KNOWLEDGE_BASE_TOOL, SEARCH_KNOWLEDGE_BASE_TOOL_NAME
 from chatbot.constants.voice_provider_defaults import get_provider_defaults, VOICE_PROVIDER_DEFAULTS
 from chatbot.models.enums import (
     CreateStoryChoices, EntityStatus, LLMModel, GenderChoices, ChatStatus,
@@ -17,6 +20,7 @@ from chatbot.models.enums import (
 )
 
 S3_BASE_URL = os.getenv('S3_BASE_URL')
+logger = logging.getLogger(__name__)
 
 
 class Company(models.Model):
@@ -154,7 +158,11 @@ class CompanyBot(models.Model):
         null=True, blank=True, help_text="Provide pre-context that will be set before the main prompt to shape the "
                                          "conversation."
     )
-    tool_context = models.TextField(null=True, blank=True)
+    tool_context = models.TextField(
+        null=True, blank=True,
+        help_text="JSON tool definitions for the LLM. For SIMPLE bots, the search_knowledge_base "
+                  "entry here is auto-added/removed based on Use vector service."
+    )
     other_params = models.JSONField(null=True, blank=True)
 
     connect_timeout = models.FloatField(default=5.0, help_text="Timeout in seconds for establishing a LLM connection.")
@@ -174,7 +182,9 @@ class CompanyBot(models.Model):
         default=False,
         help_text=(
             "Enable vector knowledge base search. Uses a two-step LLM call: "
-            "first to extract the search query, then to answer with retrieved context."
+            "first to extract the search query, then to answer with retrieved context. "
+            "SIMPLE bots only: on save, this adds/removes the search_knowledge_base tool "
+            "in Tool context automatically, leaving other tools untouched."
         )
     )
     enable_web_search = models.BooleanField(
@@ -221,10 +231,64 @@ class CompanyBot(models.Model):
             self.cache_ttl = None
             self.cache_targets = None
 
+    @staticmethod
+    def _tool_entry_name(entry):
+        return (entry.get('function', {}) or {}).get('name') or entry.get('name', '')
+
+    def _sync_vector_search_tool(self):
+        """Keep the search_knowledge_base tool entry in tool_context in step with
+        use_vector_service, for SIMPLE bots only (tool_context on STATE_MACHINE bots
+        lives per-step on CompanyStateMachine and is left untouched here).
+        Returns True if self.tool_context was changed."""
+        if self.bot_type != CompanyBotTypeChoices.SIMPLE:
+            return False
+
+        raw = (self.tool_context or '').strip()
+        parsed = None
+        if raw:
+            try:
+                import json_repair
+                parsed = json_repair.repair_json(raw, return_objects=True)
+            except Exception as e:
+                logger.error(f"CompanyBot {self.pk}: failed to parse tool_context while syncing vector search tool: {e}")
+                return False
+
+        if isinstance(parsed, dict):
+            tools_key = 'tools' if 'tools' in parsed else ('tool' if 'tool' in parsed else 'tools')
+            tools = list(parsed.get(tools_key) or [])
+        elif isinstance(parsed, list):
+            tools_key = None
+            tools = list(parsed)
+        else:
+            tools_key = None
+            tools = []
+
+        has_tool = any(self._tool_entry_name(t) == SEARCH_KNOWLEDGE_BASE_TOOL_NAME for t in tools)
+
+        if self.use_vector_service:
+            if has_tool:
+                return False
+            tools = tools + [SEARCH_KNOWLEDGE_BASE_TOOL]
+        else:
+            if not has_tool:
+                return False
+            tools = [t for t in tools if self._tool_entry_name(t) != SEARCH_KNOWLEDGE_BASE_TOOL_NAME]
+
+        if not tools:
+            self.tool_context = None
+        elif tools_key:
+            parsed[tools_key] = tools
+            self.tool_context = json.dumps(parsed, ensure_ascii=False)
+        else:
+            self.tool_context = json.dumps(tools, ensure_ascii=False)
+        return True
+
     def save(self, *args, **kwargs):
         update_fields = kwargs.get('update_fields')
-        gateway_fields_changing = update_fields is None or {'gateway_provider', 'gateway_model'} & set(update_fields)
         reset_fields = set()
+        if self._sync_vector_search_tool():
+            reset_fields |= {'tool_context'}
+        gateway_fields_changing = update_fields is None or {'gateway_provider', 'gateway_model'} & set(update_fields)
         if self.pk and gateway_fields_changing:
             old = CompanyBot.objects.filter(pk=self.pk).only('gateway_provider', 'gateway_model').first()
             if old and old.gateway_provider != self.gateway_provider:
