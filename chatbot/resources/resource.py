@@ -3,7 +3,6 @@ from import_export.fields import Field
 from import_export.widgets import ForeignKeyWidget
 from chatbot.models import CompanyChat, Profile, Company
 from chatbot.models.geo_models import ProfileAddress
-from chatbot.models.media_models import ProfileMedia
 
 
 class CompanyChatResource(ModelResource):
@@ -19,9 +18,6 @@ class CompanyChatResource(ModelResource):
 
 
 class ProfileResource(ModelResource):
-    # company_name = Field(column_name='Company Name',
-    #                      attribute='company',
-    #                      widget=ForeignKeyWidget(Company, 'slug'))
     id = Field(attribute='id', column_name='ID')
     company = Field(attribute='company', column_name='company_id', widget=ForeignKeyWidget(Company, 'id'))
     customer_name = Field(attribute='first_name', column_name='Customer Name')

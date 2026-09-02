@@ -30,12 +30,16 @@ Stored under `templates/admin/batch_upload/`, these templates support a guided, 
   - Provides a step-based UI with progress indicators and field selections.
   - Includes embedded CSS for styling and JavaScript integration.
 
+### Other Admin Templates
+
+- `change_list.html`, `filter.html`: Django admin template overrides, auto-discovered by Django via path convention (not referenced explicitly in Python) — `filter.html` renders the Flatpickr date-picker widget for `CustomAdvanceDateFilter` (and any other admin filter using Django's default filter template name); `change_list.html` adds site-wide changelist customizations.
+- `import_form.html`, `export_format.html`: used by `chatbot/views/admin/bot_admin_views.py`.
+- `company_chat_import.html`: template for the company-chat import tool.
+
 ### Template Usage Context
 
-These templates are primarily used in the Django admin UI for chatbot media and data management, enabling administrators to perform bulk imports and uploads with validation and review steps.
-
-They provide a smooth UI experience to upload or import data sets, review them, and process saving actions, essential for managing chatbot content and configurations.
+The still-live templates are used in the Django admin UI for batch media upload and generic batch imports. They provide a smooth UI experience to upload or import data sets, review them, and process saving actions, essential for managing chatbot content and configurations.
 
 ---
 
-This complements backend chatbot functionalities with admin interface tools for effective management of media and model data.
+This complements backend chatbot functionalities with admin interface tools for effective management of model data.

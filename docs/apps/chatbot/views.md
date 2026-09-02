@@ -13,6 +13,8 @@ Responsibilities of this layer:
 
 Views coordinate execution but do not contain heavy domain logic.
 
+> **Note:** Story/Media/recommendation/location-specific view modules (`views/story_views.py`, `views/Media/*`, `views/recommendation.py`, `views/location_views.py`, `views/kafka_views.py`, `views/mitra_views.py`, `views/gotenberg_view.py`, `views/admin/post_processing_views.py`) were removed as not part of Saathi's scope — see the repo-root `CODE_CLEANUP_PLAN.md` for the full history.
+
 ---
 
 ## 1. Chat APIs
@@ -69,7 +71,7 @@ This module initializes and maintains authenticated user context before domain w
 - Perform first-name transliteration using AI4Bharat API (when preferred language is provided)
 - Support demo / development company slugs
 
-Ensures idempotent profile initialization aligned with company context.
+Note: this endpoint's URL route (`api/profile/`) is currently commented out/disabled in `chatbot/urls.py`.
 
 ---
 
@@ -107,26 +109,16 @@ It is the authentication boundary layer for the application.
 
 ---
 
-## 3. Recommendation APIs
-
-### `chatbot/views/recommendation.py`
-
-#### Purpose
-Provides structured domain-level recommendations (e.g., project recommendations).
+### `chatbot/views/profile_views.py`
 
 #### Responsibilities
 
-- Accept contextual filters or identifiers
-- Execute recommendation logic
-- Rank or filter recommendation results
-- Format structured response output
-- Return deterministic response schema
-
-This endpoint is independent from conversational workflows.
+- Create profile records (`create_profile_views`)
+- Read the caller's Elevate UMS profile (`read_elevate_profile`, relocated here from the removed `shikshalokam` app — served at `api/shikshalokam/read-elevate-profile/`)
 
 ---
 
-## 4. Translation, Voice & Transliteration APIs
+## 3. Translation, Voice & Transliteration APIs
 
 ### `chatbot/views/bhashini_views.py`
 
@@ -194,261 +186,20 @@ It centralizes all language transformation workflows behind route-based configur
 
 ---
 
-## 5. Media & Knowledge Ingestion APIs
-
-### `chatbot/views/Media/document_upload_view.py`
-
-#### Responsibilities
-
-- Accept document upload requests
-- Validate file inputs
-- Create Media model entries
-- Associate media with Company context
-- Persist metadata fields
-- Store initial structured data
-
----
-
-### `chatbot/views/Media/upload_views.py`
-
-#### Responsibilities
-
-- Handle media upload workflows
-- Normalize request payload
-- Save structured media-related information
-- Prepare media records for downstream processing
-
----
-
-### `chatbot/views/Media/extract_views.py`
-
-#### Responsibilities
-
-- Trigger AI extraction workflows
-- Initiate asynchronous Celery tasks
-- Pass relevant media identifiers
-- Manage extraction initiation state
-
----
-
-### `chatbot/views/Media/save_views.py`
-
-#### Purpose
-
-Handles structured save operations related to Media entities.
-
-#### Responsibilities
-
-- Accept media-related update requests
-- Persist structured metadata changes
-- Update existing Media model fields
-- Ensure data validation before persistence
-- Return updated media state
-
-This view complements upload and extraction workflows by handling structured persistence updates after initial creation.
-
----
-
-### `chatbot/views/Media/status_views.py`
-
-#### Responsibilities
-
-- Accept Celery task IDs
-- Query task readiness using AsyncResult
-- Return structured task status
-- Handle success and failure states
-- Support frontend polling for async workflows
-
----
-
-### `chatbot/views/Media/media_tracking_views.py`
-
-#### Responsibilities
-
-- Track ingestion state of media records
-- Return structured tracking information
-- Expose status metadata for frontend monitoring
-
----
-
-### `chatbot/views/Media/media_views.py`
-
-#### Responsibilities
-
-- Retrieve media objects
-- Return structured media details
-- Support CRUD-like media interactions
-
----
-
-### `chatbot/views/Media/media_api_views.py`
-
-#### Responsibilities
-
-- Implement PostgreSQL Full-Text Search (SearchVector)
-- Apply SearchRank ordering
-- Enable tag-based filtering
-- Enable key-value metadata filtering
-- Support query parameter-based search
-- Implement pagination or limit-based slicing
-
-Provides structured and ranked retrieval over ingested knowledge assets.
-
----
-
-## 6. Story Management APIs
-
-### `chatbot/views/story_views.py`
-
-#### Purpose
-
-Manages the full lifecycle of Story entities, including:
-
-- Story creation from chat sessions
-- Multilingual translation handling
-- Story updates with synchronization
-- Media attachment
-- Story recreation
-- Automatic PDF regeneration
-
----
-
-#### Core Responsibilities
-
-##### 1. Story Creation (`end_story`)
-
-- Create structured Story from completed chat session
-- Use `create_story_object` utility
-- Support flow-based creation
-- Return generated story ID and content
-
-##### 2. Story CRUD (DRF-Based)
-
-- List and create stories (`StoryListCreateView`)
-- Retrieve, update, delete stories (`StoryRetrieveUpdateDestroyView`)
-- Filter by session and author
-
-##### 3. Multilingual Translation Handling
-
-- Detect language using `LanguageDetectionMixin`
-- If language ≠ English:
-  - Get or create translation record
-  - Update translated fields
-  - Sync translated content back to main story
-- Maintain translation integrity across updates
-
-##### 4. Automatic PDF Regeneration
-
-When story is updated:
-
-- Trigger `update_story_pdf`
-- Skip PDF update for Reflection flow
-- Ensure story artifacts stay synchronized after edits
-
-##### 5. Story Media Management
-
-- Attach media to stories (`StoryMediaListCreateView`)
-- Update/delete story media
-- Trigger PDF regeneration on media changes
-- Maintain story-media associations
-
-##### 6. Profile Media Management
-
-- CRUD operations for profile-level media
-- Filter by profile
-
-##### 7. Story Recreation (`story_recreate_view`)
-
-- Reconstruct Story from profile + session
-- Use `re_create_story_object`
-- Useful for regenerating lost or inconsistent story content
-
-##### 8. Story Retrieval by Session
-
-- Fetch all stories associated with a session
-- Return full serialized story representation
-
----
-
-#### Architectural Role
-
-This module:
-
-- Bridges chat sessions and persistent Story records
-- Handles multilingual story synchronization
-- Manages story-level media attachments
-- Keeps story PDFs consistent with content updates
-- Provides deterministic CRUD APIs via DRF
-
-It acts as the domain controller for narrative content lifecycle management.
-
----
-
-## 7. Profile Management APIs
-
-### `chatbot/views/profile_views.py`
-
-#### Responsibilities
-
-- Create profile records
-- Update profile information
-- Retrieve profile details
-- Associate profile with Company
-- Maintain profile integrity constraints
-
-Separate from authentication/session initialization logic.
-
----
-
-## 8. Location APIs
-
-### `chatbot/views/location_views.py`
-
-#### Responsibilities
-
-- Fetch location data
-- Return structured location responses
-- Provide contextual location information
-
----
-
-## 9. Infrastructure Integration APIs
+## 4. Infrastructure Integration APIs
 
 ### `chatbot/views/aws_views.py`
 
 #### Responsibilities
 
-- Generate S3 presigned URLs
+- Generate S3 presigned URLs (`get_presigned_url`)
+- Handle local-dev-mode direct file upload (`upload_media_local`) — the counterpart used when `STORAGE_CLOUD_PROVIDER=LOCAL`
 - Validate upload-related parameters
 - Return signed access credentials
 
 ---
 
-### `chatbot/views/kafka_views.py`
-
-#### Responsibilities
-
-- Accept structured payloads
-- Perform request validation
-- Trigger Kafka-related operations
-- Return status response
-
-Documentation reflects only the request-level responsibilities of this view.
-
----
-
-### `chatbot/views/gotenberg_view.py`
-
-#### Responsibilities
-
-- Accept document payload
-- Trigger PDF rendering process
-- Return rendered PDF response
-- Handle response formatting
-
----
-
-## 10. DRF-Based Generic APIs
+## 5. DRF-Based Generic APIs
 
 ### `chatbot/views/drf_views.py`
 
@@ -459,7 +210,7 @@ Provides Django REST Framework–based generic CRUD endpoints for core models.
 #### Responsibilities
 
 - Implement ListCreateAPIView and RetrieveUpdateAPIView patterns
-- Expose model-level CRUD operations
+- Expose model-level CRUD operations for CompanyChat, CompanyBot, BotVernacular, ChatSession, and Flow-related lookups
 - Apply serializer-based validation
 - Integrate Django Filter backend for query filtering
 - Support pagination and query parameter filtering
@@ -469,44 +220,7 @@ This module centralizes DRF-based CRUD patterns instead of writing custom views 
 
 ---
 
-## 11. Mitra Project Creation & Report API
-
-### `chatbot/views/mitra_views.py`
-
-#### Purpose
-
-Handles Mitra project creation along with automated report generation (PDF & Excel).
-
----
-
-#### Responsibilities
-
-- Validate required project inputs
-- Optionally create external project via `create_project_utils` (if access token is provided)
-- Create internal Mitra project via `create_mitra_project_utils`
-- Normalize source data and format project timeline
-- Generate structured PDF report
-- Generate structured Excel report
-- Upload generated files to S3 using `upload_media`
-- Attach media references to the created project
-- Handle report-generation exceptions gracefully
-
----
-
-#### Architectural Role
-
-This endpoint combines:
-
-- Project persistence
-- External project synchronization
-- Document generation
-- Media storage integration
-
-It is a domain workflow API focused on project lifecycle and artifact generation, not conversational processing.
-
----
-
-## 12. Admin & Configuration Views
+## 6. Admin & Configuration Views
 
 These views are accessible through Django Admin and are restricted to authenticated staff users.
 
@@ -575,43 +289,11 @@ This acts as a generic data ingestion utility within the admin layer.
 
 ---
 
-### `chatbot/views/admin/post_processing_views.py`
+### `chatbot/views/admin/chat_import_views.py`
 
 #### Purpose
 
-Triggers asynchronous post-processing workflows on Story entities.
-
-These workflows refine, filter, or transform story-related data using background tasks.
-
-#### Detailed Responsibilities
-
-- Accept admin-triggered processing requests
-- Dynamically determine processing type based on configuration
-- Validate required input parameters
-- Trigger Celery-based asynchronous post-processing tasks
-- Return Celery task ID for tracking
-- Provide task status polling endpoint
-- Handle success and failure reporting
-- Return structured iteration or transformation statistics
-
-#### Processing Examples
-
-Depending on configuration, post-processing may include:
-
-- Unique challenge extraction
-- Unique solution extraction
-- Deduplication logic
-- Content refinement
-- Iterative filtering workflows
-
-#### What This Enables
-
-- Admin-triggered refinement pipelines
-- Controlled execution of AI-based story processing
-- Asynchronous transformation without blocking admin interface
-- Transparent task monitoring via polling endpoints
-
-This view provides structured control over background story refinement processes.
+Supports the company-chat import tool (see `chatbot/templates/admin/company_chat_import.html`).
 
 ---
 
@@ -631,7 +313,7 @@ This view provides structured control over background story refinement processes
 Views manage request lifecycle and workflow initiation.
 
 ### 2. Async-Aware Architecture
-Heavy workflows (extraction, embedding) rely on Celery.
+Heavy workflows rely on Celery.
 
 ### 3. Structured Persistence Before Async Execution
 Data is persisted before triggering asynchronous workflows.

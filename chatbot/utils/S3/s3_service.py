@@ -2,8 +2,6 @@ import boto3
 import os
 import time
 import requests
-from shikshalokam.models import Project
-
 
 
 def upload_file_to_s3(
@@ -51,49 +49,3 @@ def upload_file_to_s3(
     except Exception as e:
         print(f"S3 upload error: {str(e)}")
         return None
-
-def upload_media(
-    *,
-    project_id: int,
-    media_type: str,
-    file_name: str,
-    file_content,
-    content_type: str,
-    folder_structure: str = "shikshagraha_commons/",
-):
-
-    s3_key = upload_file_to_s3(
-        file_name=file_name,
-        file_content=file_content,
-        content_type=content_type,
-        project_id=project_id,
-        folder_structure=folder_structure,
-    )
-
-    if not s3_key:
-        return None
-
-    base = os.getenv("S3_MEDIA_URL")
-    media_url = f"{base}{s3_key}"
-
-    existing_other_params = (
-        Project.objects.filter(id=project_id)
-        .values_list("other_params", flat=True)
-        .first()
-        or {}
-    )
-
-    existing_other_params[media_type] = {
-        "url": media_url,
-        "file_name": file_name,
-    }
-
-    Project.objects.filter(id=project_id).update(
-        other_params=existing_other_params
-    )
-
-    return {
-        "media_type": media_type,
-        "url": media_url,
-        "file_name": file_name,
-    }

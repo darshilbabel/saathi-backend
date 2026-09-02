@@ -16,20 +16,7 @@ app = Celery(
 
 app.config_from_object("django.conf:settings", namespace="CELERY")
 app.autodiscover_tasks([
-    'chatbot.celery_tasks.shikshalokam_bedrock_tasks',
-    'chatbot.celery_tasks.one_shot_bedrock_tasks',
-    'chatbot.celery_tasks.chaupal_tasks',
     'chatbot.celery_tasks.common_chat_tasks',
-    'chatbot.celery_tasks.reflection_bedrock_tasks',
-    'chatbot.celery_tasks.mitra_bedrock_tasks',
-    'chatbot.utils.story_utils',
-    'chatbot.celery_tasks.guided_guest_tasks',
-    'chatbot.celery_tasks.oneshot_guest_tasks',
-    'chatbot.celery_tasks.ptm_report_tasks',
-    'chatbot.celery_tasks.knowledge_service.tag_tasks',
-    'chatbot.celery_tasks.knowledge_service.media_tasks',
     'chatbot.celery_tasks.flow_tasks',
-    'chatbot.celery_tasks.free_flow_tasks',
-    'chatbot.celery_tasks.post_processing_tasks',
     'chatbot.celery_tasks.title_tasks'
 ])

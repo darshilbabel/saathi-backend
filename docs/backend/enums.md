@@ -8,6 +8,8 @@ Enums ensure consistency, validation, and type safety for status fields, provide
 
 ---
 
+> **Note:** `ThemeType`, `TagChoices`, `TagSourceChoices`, `MediaTemplateChoices`, `StorySourceChoices`, `StoryStatusChoices`, and `CreateStoryChoices` were removed as unused (Story/Media/Theme cleanup). `MediaTypeChoices` and `StoryLanguageChoices` remain despite the naming — they're still used by kept code (`media_creation.py`'s PDF/DOCX generation, `ChatSession.language`).
+
 ## 1. ChatStageChoices
 
 ### Purpose
@@ -296,23 +298,7 @@ Lists supported language-region codes.
 
 ---
 
-## 16. MediaTemplateChoices
-
-### Purpose
-
-Defines supported media template formats.
-    Used in content rendering workflows.
-
-### Values
-
-| Name | Value |
-|------|-------|
-| EJS | EJS |
-| RAW_TEXT | RAW-TEXT |
-
----
-
-## 17. MediaTypeChoices
+## 16. MediaTypeChoices
 
 ### Purpose
 
@@ -336,7 +322,7 @@ Supported MIME types for uploaded media.
 
 ---
 
-## 18. PDFStrategyChoices
+## 17. PDFStrategyChoices
 
 ### Purpose
 
@@ -354,7 +340,7 @@ Lists available PDF generation strategies.
 
 ---
 
-## 19. PostProcessOutputMode
+## 18. PostProcessOutputMode
 
 ### Purpose
 
@@ -370,7 +356,7 @@ Controls workflow behavior after postprocessing.
 
 ---
 
-## 20. PostProcessType
+## 19. PostProcessType
 
 ### Purpose
 
@@ -387,7 +373,7 @@ Defines postprocessing strategy after LLM response.
 
 ---
 
-## 21. PreProcessOutputMode
+## 20. PreProcessOutputMode
 
 ### Purpose
 
@@ -403,7 +389,7 @@ Controls behavior after preprocessing stage.
 
 ---
 
-## 22. PreProcessType
+## 21. PreProcessType
 
 ### Purpose
 
@@ -420,7 +406,7 @@ Defines preprocessing strategy before LLM execution.
 
 ---
 
-## 23. ProfileType
+## 22. ProfileType
 
 ### Purpose
 
@@ -437,7 +423,7 @@ Defines different user profile roles.
 
 ---
 
-## 24. RouteLanguageChoices
+## 23. RouteLanguageChoices
 
 ### Purpose
 
@@ -455,7 +441,7 @@ Maps URL route prefixes to language codes.
 
 ---
 
-## 25. SessionFlowName
+## 24. SessionFlowName
 
 ### Purpose
 
@@ -480,7 +466,7 @@ Represents predefined session flow identifiers.
 
 ---
 
-## 26. StoryLanguageChoices
+## 25. StoryLanguageChoices
 
 ### Purpose
 
@@ -498,73 +484,7 @@ Lists supported languages for stories.
 
 ---
 
-## 27. StorySourceChoices
-
-### Purpose
-
-Specifies origin of story content.
-    Tracks AI, user, or third-party sources.
-
-### Values
-
-| Name | Value |
-|------|-------|
-| AI_GENERATED | AI_GENERATED |
-| USER_GENERATED | USER_GENERATED |
-| THIRD_PARTY | THIRD_PARTY |
-
----
-
-## 28. StoryStatusChoices
-
-### Purpose
-
-Represents lifecycle state of a story.
-    Used to track processing and completion status.
-
-### Values
-
-| Name | Value |
-|------|-------|
-| PENDING | PENDING |
-| COMPLETED | COMPLETED |
-
----
-
-## 29. TagChoices
-
-### Purpose
-
-Defines moderation status for tags.
-    Used in approval and publishing workflows.
-
-### Values
-
-| Name | Value |
-|------|-------|
-| APPROVED | Approved |
-| PENDING | Pending |
-
----
-
-## 30. TagSourceChoices
-
-### Purpose
-
-Identifies origin of a tag entry.
-    Distinguishes manual and AI-based tagging.
-
-### Values
-
-| Name | Value |
-|------|-------|
-| MANUAL | MANUAL |
-| AI_EXTRACTED | AI_EXTRACTED |
-| AI_GENERATED | AI_GENERATED |
-
----
-
-## 31. TextConversionType
+## 26. TextConversionType
 
 ### Purpose
 
@@ -580,23 +500,7 @@ Specifies text transformation operation type.
 
 ---
 
-## 32. ThemeType
-
-### Purpose
-
-Specifies theme source for a bot instance.
-    Used to select custom or master UI themes.
-
-### Values
-
-| Name | Value |
-|------|-------|
-| CUSTOM | custom |
-| MASTER | master |
-
----
-
-## 33. VoiceProvider
+## 27. VoiceProvider
 
 ### Purpose
 
@@ -615,7 +519,7 @@ Lists supported speech processing providers.
 
 ---
 
-## 34. VoiceProviderChoices
+## 28. VoiceProviderChoices
 
 ### Purpose
 
@@ -633,7 +537,7 @@ Lists supported cloud voice providers.
 
 ---
 
-## 35. VoiceType
+## 29. VoiceType
 
 ### Purpose
 

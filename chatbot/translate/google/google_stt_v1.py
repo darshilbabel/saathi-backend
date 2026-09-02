@@ -18,7 +18,6 @@ def transcribe_multiple_languages_v1(
         audio = speech.RecognitionAudio(content=audio_bytes)
         config = types.RecognitionConfig(
             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-            # sample_rate_hertz=16000,
             language_code=language_codes[0],
             alternative_language_codes=language_codes[1:] if len(language_codes) > 1 else [],
             model="default",

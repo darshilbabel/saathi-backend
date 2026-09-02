@@ -34,7 +34,6 @@ def handle_llama_model(
         url = url_to_use
     else:
         url = os.getenv('LLAMA_BASE_URL') + 'v1/chat/completions'
-        # finetune_url = os.getenv('LLAMAFINETUNE_BASE_URL') + 'v1/chat/completions'
 
     payload = {
         "messages": messages,

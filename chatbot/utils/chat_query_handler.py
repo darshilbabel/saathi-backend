@@ -20,8 +20,6 @@ def query_database(query_prompt: str, priority_filter: str, limit: int):
         "query": query_prompt,
         "top_k": limit,
     }
-    # if priority_filter:
-    #     data["priority_filter"] = priority_filter
     print("DATA: ", data)
     response = requests.post(url, json=data, headers=headers)
     if response.status_code == 200:

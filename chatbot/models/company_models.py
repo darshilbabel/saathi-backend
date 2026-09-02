@@ -13,7 +13,7 @@ from chatbot.constants.tool_definitions import SEARCH_KNOWLEDGE_BASE_TOOL, SEARC
 from chatbot.constants.voice_provider_defaults import get_provider_defaults, VOICE_PROVIDER_DEFAULTS
 from chatbot.constants.provider_slugs import VOICE_PROVIDER_TO_SLUG, SLUG_TO_VOICE_PROVIDER
 from chatbot.models.enums import (
-    CreateStoryChoices, EntityStatus, LLMModel, GenderChoices, ChatStatus,
+    EntityStatus, LLMModel, GenderChoices, ChatStatus,
     FeedbackChoices, CompanyBotTypeChoices, CompanyBotDynamicContextType, CompanyChatSourceChoices,
     VoiceProvider, VoiceType, LLMProvider, EntityTypeChoices, TextConversionType,
     PreProcessType, PreProcessOutputMode, PostProcessType, PostProcessOutputMode,
@@ -893,12 +893,6 @@ class Flow(models.Model):
         blank=True,
         related_name='flows',
         help_text="Image configuration settings for this flow."
-    )
-    create_story = models.CharField(
-        max_length=20,
-        choices=CreateStoryChoices.choices,
-        default=CreateStoryChoices.ALL,
-        help_text="Whether to post process the story or not"
     )
 
     created_at = models.DateTimeField(auto_now_add=True)

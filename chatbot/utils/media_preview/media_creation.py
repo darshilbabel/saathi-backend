@@ -1,8 +1,6 @@
 import os
 import logging
 
-from chatbot.models import CompanyBot
-from chatbot.models.story_vernacular_model import StoryVernacular
 from chatbot.utils.S3.s3_service import upload_file_to_s3
 from chatbot.utils.gotenberg_utils import generate_pdf_with_gotenberg
 from chatbot.models.enums import MediaTypeChoices
@@ -74,26 +72,7 @@ def text_to_html(text_content, company_bot_id) -> str:
     import re
 
     max_char_per_page = 1500
-    try:
-        print(f"company_bot_id: {company_bot_id}")
-        logger.info(f"company_bot_id: {company_bot_id}")
-        company_bot = CompanyBot.objects.filter(id=company_bot_id).first()
-        print(f"company_bot: {company_bot}")
-        logger.info(f"company_bot: {company_bot}")
-        if company_bot:
-            story_vernacular = StoryVernacular.objects.filter(
-                company_bot=company_bot, language='en'
-            ).first()
-            print(f"story_vernacular: {story_vernacular}")
-            logger.info(f"story_vernacular: {story_vernacular}")
-            if story_vernacular and story_vernacular.translation_json:
-                logger.info(f"story_vernacular translation_json: {story_vernacular.translation_json}")
-                max_char_per_page = story_vernacular.translation_json.get(
-                    'page_split_char_len', max_char_per_page
-                )
-        logger.info(f"Using max_char_per_page: {max_char_per_page}")
-    except Exception as e:
-        logger.info(f"Could not get max_char_per_page from StoryVernacular: {e}")
+    logger.info(f"Using max_char_per_page: {max_char_per_page}")
 
     # Markdown → HTML
     html = markdown.markdown(

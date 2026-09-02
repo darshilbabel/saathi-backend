@@ -4,11 +4,14 @@
 
 The `consumers` module manages real-time WebSocket connections for the chatbot, enabling continuous interactive chat experiences. It handles message receipt, session management, and asynchronous processing initiation.
 
-## Primary Consumer
+Only one flow is live: every websocket session — regardless of bot type (guided, oneshot, guest discussion, etc.) — connects through the single `ws/common/` route and is dispatched internally by `BotServiceFactory`/`ResponseHandlerFactory` (see [Strategies](chatbot_strategies.md) and [Services](chatbot_services.md)). The `consumers` directory previously held several flow-specific consumer classes (chaupal, free-flow, guided-guest, oneshot-guest, and various Bedrock-provider variants); those were confirmed unrouted (never registered in `chatbot/routing.py`'s `websocket_urlpatterns`) and removed.
+
+## Consumers
 
 ### AsyncSocketConsumer
 
 - Located in `chatbot/consumers/async_consumer.py`.
+- The only consumer registered in `chatbot/routing.py` (`websocket_urlpatterns`), mounted at `ws/common/`.
 - Extends `AsyncBaseConsumer` to implement core WebSocket lifecycle methods: connect, disconnect, and receive.
 - Key features include:
   - Session and profile initialization on authentication messages.
@@ -16,18 +19,7 @@ The `consumers` module manages real-time WebSocket connections for the chatbot, 
   - Message translation capabilities based on user-selected languages.
   - Asynchronous database operations for session creation and message logging.
 
-## Other Consumer Modules
+### AsyncBaseConsumer
 
-The `consumers` directory includes specialized consumers targeting different chatbot flows and LLM providers:
-
-- **async_chaupal_consumer.py**: Handles Chaupal style guest discussion bots with long-running conversational contexts.
-- **async_base_consumer.py**: Base class providing common WebSocket async consumer utilities.
-- **base_consumer.py**: Synchronous base consumer class.
-- **chaupal_consumer.py**: Synchronous consumer for Chaupal bots.
-- **free_flow_consumer.py**: Handles free-form chatbot conversations.
-- **guided_guest_consumer.py**: Manages guided guest chatbot interactions.
-- **mitra_bedrock_consumer.py**, **one_shot_bedrock_consumer.py**, **shikshalokam_bedrock_consumer.py**: Integrations with Bedrock LLM provider for different bot types.
-- **oneshot_guest_consumer.py**: One-shot guest chatbot conversation handling.
-- **Reflection_bedrock_consumer.py**: Reflection bot using Bedrock.
-
-Each specialized consumer adapts websocket interactions tailored for the specific chatbot flow or LLM provider use case.
+- Located in `chatbot/consumers/async_base_consumer.py`.
+- Base class providing common async WebSocket consumer utilities that `AsyncSocketConsumer` extends.
