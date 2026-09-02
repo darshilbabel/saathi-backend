@@ -6,8 +6,8 @@ The Chatbot application is a key component of the Shikshalokam platform, designe
 
 ## Purpose and Features
 
-- Handles multi-strategy chatbot interactions including guided, one-shot, and guest discussion bots.
-- Supports real-time communication via websocket consumers.
+- Handles conversational chatbot interactions via a single strategy (`CommonBotStrategy`) shared by every flow type — see [Strategies](chatbot_strategies.md).
+- Supports real-time communication via a single websocket consumer/route (`ws/common/`).
 - Integrates asynchronous message handling using Celery tasks for efficient background processing.
 - Comprehensive authentication with JWT and token blacklisting.
 

@@ -23,7 +23,6 @@ nav:
           - Overview: apps/chatbot/overview.md
           - Authentication: apps/chatbot/chatbot_auth.md
           - Admin: apps/chatbot/chatbot_admin.md
-          - Form: apps/chatbot/chatbot_form.md
           - Services: apps/chatbot/chatbot_services.md
           - Strategies: apps/chatbot/chatbot_strategies.md
           - Consumers: apps/chatbot/chatbot_consumers.md
@@ -33,26 +32,10 @@ nav:
           - URLs and Routing: apps/chatbot/chatbot_urls.md
           - Templates: apps/chatbot/chatbot_templates.md
           - Serializer and Filters: apps/chatbot/chatbot_serializer_and_filter.md
-          - PDF Generation: apps/chatbot/chatbot_pdf.md
           - Scripts: apps/chatbot/chatbot_scripts.md
           - Translation Layer: apps/chatbot/chatbot_translate.md
           - Models: apps/chatbot/models.md
           - Views: apps/chatbot/views.md
-       - Shikshalokam:
-          - Overview: apps/shikshalokam/overview.md
-          - Utils: apps/shikshalokam/utils.md
-          - Views: apps/shikshalokam/views.md
-          - Admin: apps/shikshalokam/admin.md
-          - URLs: apps/shikshalokam/urls.md
-          - Models: apps/shikshalokam/models.md
-       - Observability:
-           - Overview: apps/observability/overview.md
-           - Admin: apps/observability/observability_admin.md
-           - Celery Tasks: apps/observability/observability_celery_tasks.md
-           - Utils: apps/observability/observability_utils.md
-           - Views: apps/observability/observability_views.md
-           - URLs: apps/observability/observability_urls.md
-           - Models: apps/observability/models.md
 
 
   - Backend:

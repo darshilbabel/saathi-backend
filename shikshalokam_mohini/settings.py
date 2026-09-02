@@ -84,17 +84,13 @@ CORS_ALLOWED_METHODS = [
 
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '').split(',')
 
-# ALLOWED_HOSTS.append(gethostbyname(gethostname()))
-
 
 # Application definition
 
 INSTALLED_APPS = [
     'rangefilter',
-    'observability',
     'daphne',
     'chatbot',
-    'shikshalokam',
     'jazzmin',
     'django.contrib.admin',
     'django.contrib.auth',
@@ -486,19 +482,4 @@ LOG_VIEWER_FILES_DIR = LOGGING_DIR
 LOG_VIEWER_PATTERNS = ["INFO", "DEBUG", "WARNING", "ERROR", "CRITICAL"]
 LOG_VIEWER_FILE_LIST_TITLE = "Application Logs"
 
-CRONJOBS = [
-    # ('30 2 * * *', 'chatbot.cron_tasks.chaupal.chaupal_cront_tasks.handle_story_cleanup_cron',
-    #  '>> /tmp/handle_story_cleanup_cron.log 2>&1'),
-    ('30 3 * * *', 'chatbot.cron_tasks.chaupal.chaupal_cront_tasks.handle_village_ingestion_cron',
-     '>> /tmp/handle_village_ingestion_cron.log 2>&1'),
-    ('0 22 * * *', 'chatbot.cron_tasks.translation_cron.handle_non_english_fix_cron',
-     '>> /tmp/handle_non_english_fix_cron.log 2>&1'),
-     ('0 12 * * *', 'chatbot.cron_tasks.delhi_shiksha_samvad.story_creation.create_story',
-    '>> /tmp/delhi_shiksha_samvad_story_creation.log 2>&1'),
-    ('0 12 * * *', 'chatbot.cron_tasks.shiksha_samvad.story_creation.create_story',
-    '>> /tmp/shiksha_samvad_story_creation.log 2>&1'),
-    ('0 */2 * * *', 'chatbot.cron_tasks.telangana_ptm_pilot.school_classification.main',
-    '>> /tmp/telangana_ptm_pilot_school_classification.log 2>&1'),
-    ('15 */2 * * *', 'chatbot.cron_tasks.telangana_ptm_pilot.metrics_extraction.extract_metrics',
-    '>> /tmp/telangana_ptm_pilot_metrics_extraction.log 2>&1'),
-]
+CRONJOBS = []

@@ -2,13 +2,14 @@
 
 ## Overview
 
-The LLM module integrates various large language models into the chatbot system, providing advanced conversational capabilities and story generation.
+The LLM module integrates various large language models into the chatbot system, providing advanced conversational capabilities.
 
 ## Location
 
 Located in the `chatbot/llm_models/` directory, the integration includes:
 
 - `llm_script.py`: Implements core logic for interacting with different LLM providers and managing prompt orchestration.
+- `llm_gateway.py`: Gateway-level LLM invocation helpers.
 
 ## Supported LLM Providers and Features
 

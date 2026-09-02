@@ -21,4 +21,8 @@ The chatbot management commands serve two primary purposes to facilitate setup a
 
 Together, these commands streamline first-time database setup and ensure essential company and admin records exist for the chatbot to function properly.
 
+### 3. Translation Provider Testing (`test_translate_providers.py`)
+
+- Exercises the configured translation providers to verify connectivity/credentials.
+
 ---

@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document covers the serializers and filters modules within the chatbot application, which play crucial roles in data transformation, validation, and querying.
+This document covers the serializers and filters modules within the chatbot application, which play crucial roles in data transformation, validation, and querying. Story/Media-specific serializers and filters (`media_serializer.py`, `story_serializer.py`, `media_filters.py`, `flow_filter.py`, `story_filter.py`) were removed along with those features — see the repo-root `CODE_CLEANUP_PLAN.md` for the full history.
 
 ## Serializers
 
@@ -10,11 +10,9 @@ Serializers handle the conversion between complex data types like Django models 
 
 ### Key Serializer Modules
 
-- `base_serializer.py`: Base serializers providing common functionality.
-- `media_serializer.py`: Serializers related to media models.
-- `company_serializer.py`: Serializers for company-related data.
-- `profile_serializer.py`: Handles profile model serialization and validation.
-- `story_serializer.py`: Serializes Story entities.
+- `base_serializer.py`: Base serializers providing common functionality (e.g. `ChatSessionSerializer`).
+- `company_serializer.py`: Serializers for company-related data, including Flow language/connection-info serializers.
+- `profile_serializer.py`: Handles profile, company chat, and company chat feedback serialization/validation.
 
 ## Filters
 
@@ -23,10 +21,7 @@ The filters in the chatbot are primarily used for filtering functionality within
 ### Key Filter Modules
 
 - `admin_filter.py`: Provides core filtering capabilities customized for the admin panel.
-- `media_filters.py`: Support filtering on Media models for admin views.
-- `flow_filter.py`: Implements filters for chatbot flow related admin queries.
-- `story_filter.py`: Enables filtering of Story records in admin.
-- `drf_filter.py`: Contains filters that may be used internally by views or admin.
+- `drf_filter.py`: Contains filters used internally by DRF views.
 - `custom_date_from_filter.py`: Provides specialized date filters for admin usage.
 
 ## Interaction

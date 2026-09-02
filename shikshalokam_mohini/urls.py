@@ -19,7 +19,7 @@ from django.urls import path, include, re_path
 from django.conf import settings
 from django.conf.urls.static import static
 from rest_framework.documentation import include_docs_urls
-from shikshalokam.views import health_views
+from chatbot.views import health_views
 from chatbot.views import aws_views
 
 
@@ -30,7 +30,6 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('health/', health_views.health_check, name='health_check'),
     path('docs/', include_docs_urls(title='API Documentation')),
-    path('api/shikshalokam/', include('shikshalokam.urls')),
     re_path(r'^api/storage/upload-local/(?P<object_key>.+)$', aws_views.upload_media_local, name='upload_media_local'),
     path("", include("chatbot.urls", namespace="chatbot")),
     path('log-viewer/', include('log_viewer.urls')),

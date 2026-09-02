@@ -2,17 +2,16 @@
 
 ## Overview
 
-The `admin` module contains Django admin customizations facilitating management of chatbot configurations and content through the Django Admin interface.
+The `admin` module contains Django admin customizations facilitating management of chatbot configurations and content through the Django Admin interface. Story/Media/Theme/I18n admin modules (`story_admin.py`, `media_admin.py`, `theme_admin.py`, `i18n_admin.py`) were removed along with those models — see the repo-root `CODE_CLEANUP_PLAN.md` for the full history.
 
 ## Key Admin Modules
 
 - `bot_vernacular_admin.py`: Admin configurations for bot vernacular settings allowing customization of bot messages per bot and locale.
-- `company_admin.py`: Admin setup for managing Company entities.
+- `company_admin.py`: Admin setup for managing Company, CompanyBot, Flow, and related entities.
 - `generic_upload_admin.py`: Provides generic CSV bulk upload functionality for admin models enabling structured batch data ingestion.
-- `media_admin.py`: Admin interface customizations for managing media entries related to chatbot content.
+- `language_provider_admin.py`: Admin configurations for Language/Provider/LanguageProviderConfig.
+- `pdf_template_admin.py`: Admin configurations for PDF templates.
 - `profile_admin.py`: Admin configurations for managing user profile data.
-- `story_admin.py`: Admin setups for Story management including story content and media attachments.
-- `theme_admin.py`: Admin customizations for theme management, likely affecting UI and style aspects.
 
 ## Purpose
 

@@ -1,4 +1,3 @@
-from django.utils.html import format_html
 from import_export.admin import ExportActionMixin, ImportMixin
 from django.contrib import admin
 from simple_history.admin import SimpleHistoryAdmin
@@ -7,26 +6,12 @@ from chatbot.filter.custom_date_from_filter import CustomAdvanceDateFilter
 from chatbot.models import Profile, ProfileType
 from chatbot.resources.resource import ProfileResource
 from chatbot.models.geo_models import ProfileAddress
-from chatbot.models.media_models import ProfileMedia
 
 
 class ProfileAddressInline(admin.StackedInline):
     model = ProfileAddress
     exclude = ['created_at', 'updated_at']  # Exclude fields from the inline form
     extra = 0
-
-
-class ProfileMediaInline(admin.TabularInline):
-    model = ProfileMedia
-    extra = 0
-    exclude = ['base64_str', 'file']
-    readonly_fields = ['public_url']
-
-    def public_url(self, obj):
-        url = obj.get_public_url()
-        return format_html('<img src="%s"/>' % url)
-
-    public_url.short_description = 'Public URL'
 
 
 @admin.register(Profile)
@@ -48,7 +33,7 @@ class ProfileAdmin(ImportMixin, ExportActionMixin, SimpleHistoryAdmin):
         'profile_type'
     )
     actions = ['export_selected']
-    inlines = [ProfileAddressInline, ProfileMediaInline]
+    inlines = [ProfileAddressInline]
     search_fields = ['first_name', 'email', 'phone']
     date_hierarchy = 'created_at'
     ordering = ('-created_at',)
@@ -158,13 +143,6 @@ class ProfileAdmin(ImportMixin, ExportActionMixin, SimpleHistoryAdmin):
         else:
             return ''
     city.short_description = 'City'
-
-    def business_card(self, obj):
-        profile_media = ProfileMedia.objects.filter(profile=obj)
-        if len(profile_media) > 0:
-            url = profile_media[0].get_public_url()
-            return format_html('<img src="%s" width="50" height="50" />' % url)
-    business_card.short_description = 'Business Card'
 
     def get_search_results(self, request, queryset, search_term):
         queryset, use_distinct = super().get_search_results(request, queryset, search_term)

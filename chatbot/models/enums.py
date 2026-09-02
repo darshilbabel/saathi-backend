@@ -46,15 +46,6 @@ class LLMProvider(models.TextChoices):
     OPENROUTER = 'openrouter', _('Openrouter')
 
 
-class ThemeType(models.TextChoices):
-    """
-    Specifies theme source for a bot instance.
-    Used to select custom or master UI themes.
-    """
-    CUSTOM = 'custom', _('Custom for Bot')
-    MASTER = 'master', _('Using Master Theme')
-
-
 class LLMModel(models.TextChoices):
     """
     Enumerates all supported AI model identifiers.
@@ -262,25 +253,6 @@ class ChatStageChoices(models.TextChoices):
     OTHER = 'Other', _('OTHER')
 
 
-class TagChoices(models.TextChoices):
-    """
-    Defines moderation status for tags.
-    Used in approval and publishing workflows.
-    """
-    APPROVED = 'Approved', _('Approved')
-    PENDING = 'Pending', _('Pending')
-
-
-class TagSourceChoices(models.TextChoices):
-    """
-    Identifies origin of a tag entry.
-    Distinguishes manual and AI-based tagging.
-    """
-    MANUAL = 'MANUAL', _('Manual')
-    AI_EXTRACTED = 'AI_EXTRACTED', _('AI Extracted')
-    AI_GENERATED = 'AI_GENERATED', _('AI Generated')
-
-
 class StoryLanguageChoices(models.TextChoices):
     """
     Lists supported languages for stories.
@@ -292,25 +264,6 @@ class StoryLanguageChoices(models.TextChoices):
     TELUGU = 'te', _('Telugu')
     ODIA = 'or', _('Odia')
     TAMIL = 'ta', _('Tamil')
-
-
-class StorySourceChoices(models.TextChoices):
-    """
-    Specifies origin of story content.
-    Tracks AI, user, or third-party sources.
-    """
-    AI_GENERATED = 'AI_GENERATED', _('AI_GENERATED')
-    USER_GENERATED = 'USER_GENERATED', _('USER_GENERATED')
-    THIRD_PARTY = 'THIRD_PARTY', _('THIRD_PARTY')
-
-
-class StoryStatusChoices(models.TextChoices):
-    """
-    Represents lifecycle state of a story.
-    Used to track processing and completion status.
-    """
-    PENDING = 'PENDING', _('PENDING')
-    COMPLETED = 'COMPLETED', _('COMPLETED')
 
 
 class EntityTypeChoices(models.TextChoices):
@@ -428,15 +381,6 @@ class LanguageMapping:
         return cls.get_mapped_language(language_code, region)
 
 
-class MediaTemplateChoices(models.TextChoices):
-    """
-    Defines supported media template formats.
-    Used in content rendering workflows.
-    """
-    EJS = 'EJS', _('EJS')
-    RAW_TEXT = 'RAW-TEXT', _('RAW-TEXT')
-
-
 class PDFStrategyChoices(models.TextChoices):
     """
     Lists available PDF generation strategies.
@@ -529,11 +473,6 @@ class UserTypeChoices(models.TextChoices):
     GUEST = 'guest', _('Guest')
     AUTH = 'auth', _('Authenticated')
     ALL = 'all', _('All')
-
-
-class CreateStoryChoices(models.TextChoices):
-    ALL = 'all', _('All')
-    NONE = 'none', _('None')
 
 
 class LanguageOperationChoices(models.TextChoices):

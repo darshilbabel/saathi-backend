@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from chatbot.models import BotVernacular
-from chatbot.models.company_models import CompanyStateMachine, CompanyBot, Company, ImageConfiguration, Flow
+from chatbot.models.company_models import CompanyStateMachine, CompanyBot, Company, Flow, ImageConfiguration
 
 
 class CompanySerializer(serializers.ModelSerializer):
@@ -56,7 +56,7 @@ class ImageConfigurationSerializer(serializers.ModelSerializer):
 
 class FlowLanguagesSerializer(serializers.ModelSerializer):
     """Serializer for Flow languages."""
-    
+
     class Meta:
         model = Flow
         fields = ('flow_route', 'languages')
@@ -81,7 +81,7 @@ class FlowConnectionInfoSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Flow
-        fields = ('flow_route', 'websocket_url', 'bot_route', 'isParentFlow', 'children_flows', 'image_config', 'create_story')
+        fields = ('flow_route', 'websocket_url', 'bot_route', 'isParentFlow', 'children_flows', 'image_config')
         read_only_fields = ('flow_route', 'websocket_url', 'bot_route', 'isParentFlow', 'children_flows', 'image_config')
     
     def get_isParentFlow(self, obj):

@@ -43,7 +43,7 @@ Responsible for generating system prompt content:
 
 Employs factory pattern for creating bot strategy instances:
 
-- Supports known bot strategies including 'oneshot', 'guided_guest', 'guest_discussion', and 'common'.
+- Only registers `'common'` (`CommonBotStrategy`) — the `oneshot`/`guided_guest`/`guest_discussion` strategies were removed (see [Strategies](chatbot_strategies.md); every websocket session connects through the single `ws/common/` route and `AsyncSocketConsumer` hardcodes `bot_type='common'` on its call into this factory, so those other branches were unreachable regardless of what a `CompanyBot.strategy` field says).
 - Allows dynamic extension by registering additional bot strategy classes.
 
 This service layer delivers the foundation enabling versatile chatbot operations supporting multiple interaction designs.
@@ -89,7 +89,7 @@ These services are primarily located in `chatbot/services/core/`.
 ## BotServiceFactory
 
 - Factory class to instantiate the appropriate bot strategy based on bot type.
-- Maps bot types like 'oneshot', 'guided_guest', 'guest_discussion', and 'common' to their strategy classes.
+- Only maps `'common'` to `CommonBotStrategy` — the other historical strategy types were removed as unreachable dead code.
 - Methods:
   - `create_bot_service(bot_type, route=None, extra_params=None)`
   - `register_strategy(bot_type, strategy_class)` to add new strategies.
