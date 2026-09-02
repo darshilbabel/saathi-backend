@@ -6,7 +6,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from chatbot.filter.drf_filter import ChatSessionProfileFilter
 from chatbot.parsers import StrictJSONParser
-from chatbot.models import ChatSession, BotVernacular, SessionFlowName, ChatType
+from chatbot.models import ChatSession, BotVernacular, SessionFlowName
 from chatbot.models.company_models import CompanyChat, CompanyChatFeedback, CompanyBot, Flow
 from chatbot.serializer.base_serializer import ChatSessionSerializer
 from chatbot.serializer.company_serializer import (

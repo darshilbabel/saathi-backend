@@ -16,25 +16,6 @@ class ChatStatus(models.TextChoices):
     RESUME = 'RESUME', _('RESUME')
 
 
-class ChatType(models.TextChoices):
-    """
-    Defines supported chat workflow types.
-    Controls conversation structure and bot behavior.
-    """
-    guidedReflection = 'normal', _('Guided Reflection')
-    oneStepReflection = 'oneshot', _('One Step Reflection')
-    shikshaChaupal = 'shikshalokam_chaupal', _('Shiksha Chaupal')
-    reflection = 'reflection', _('Reflection')
-    creation = 'creation', _('Creation')
-    megaPTM = 'megaPTM', _('Mega PTM')
-    YLC = 'YLC', _('YLC')
-    listeningActivity = 'listening-activity', _('Listening Activity')
-    ParentPerceptionSurvey = 'parent_perception_survey', _('Parent Perception Survey')
-    LCF = 'lcf', _('LCF')
-    LFA = 'lfa', _('LFA')
-    FreeFlow = 'free_flow', _('Free-Flow')
-
-
 class LLMProvider(models.TextChoices):
     """
     Lists supported Large Language Model providers.
@@ -119,17 +100,6 @@ class GenderChoices(models.TextChoices):
     FEMALE = 'Female', _('Female')
 
 
-class LanguageChoices(models.TextChoices):
-    """
-    Lists supported language-region codes.
-    Used for localization and speech services.
-    """
-    INDIAN_ENGLISH = 'en-IN', _('INDIAN ENGLISH')
-    INDIAN_HINDI = 'hi-IN', _('INDIAN HINDI')
-    US_ENGLISH = 'en-US', _('US ENGLISH')
-    INDIAN_KANNADA = 'kn-IN', _('INDIAN KANNADA')
-
-
 class MediaTypeChoices(models.TextChoices):
     """
     Supported MIME types for uploaded media.
@@ -146,111 +116,6 @@ class MediaTypeChoices(models.TextChoices):
     HEIC = 'image/heic', _('HEIC')
     XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', _('XLSX')
     DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', _('DOCX')
-
-
-class FileTypeChoices(models.TextChoices):
-    """
-    Supported document file types with utility helpers.
-    Provides MIME, extension, and validation methods.
-    """
-    PDF = 'application/pdf', _('PDF')
-    DOC = 'application/msword', _('DOC')
-    DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', _('DOCX')
-    TXT = 'text/plain', _('TXT')
-    CSV = 'text/csv', _('CSV')
-    XLS = 'application/vnd.ms-excel', _('XLS')
-    XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', _('XLSX')
-
-
-    @classmethod
-    def get_extension_mapping(cls):
-        """
-        Returns mapping of MIME types to file extensions.
-        Used for file naming and validation logic.
-        """
-        return {
-            cls.PDF: '.pdf',
-            cls.DOC: '.doc',
-            cls.DOCX: '.docx',
-            cls.TXT: '.txt',
-            cls.CSV: '.csv',
-            cls.XLS: '.xls',
-            cls.XLSX: '.xlsx',
-        }
-
-    @classmethod
-    def get_mime_from_extension(cls, extension):
-        """
-        Converts file extension into MIME type.
-        Returns None if extension is unsupported.
-        """
-        ext = extension.lower().lstrip('.')
-        ext_to_mime = {
-            'pdf': cls.PDF,
-            'doc': cls.DOC,
-            'docx': cls.DOCX,
-            'txt': cls.TXT,
-            'csv': cls.CSV,
-            'xls': cls.XLS,
-            'xlsx': cls.XLSX,
-        }
-        return ext_to_mime.get(ext)
-
-    @classmethod
-    def get_label_from_extension(cls, extension):
-        """
-        Returns display label from file extension.
-        Defaults to TXT label if unknown.
-        """
-        mime_type = cls.get_mime_from_extension(extension)
-        if mime_type:
-            return cls(mime_type).label
-        return cls.TXT.label
-
-    @classmethod
-    def get_valid_extensions(cls):
-        """
-        Returns list of supported file extensions.
-        Used for upload validation checks.
-        """
-        extension_mapping = cls.get_extension_mapping()
-        return [ext.lstrip('.') for ext in extension_mapping.values()]
-
-    @classmethod
-    def is_valid_extension(cls, extension):
-        """
-        Validates if provided extension is supported.
-        Returns True if valid, otherwise False.
-        """
-        ext = extension.lower().lstrip('.')
-        return ext in cls.get_valid_extensions()
-
-
-class VoiceProviderChoices(models.TextChoices):
-    """
-    Lists supported cloud voice providers.
-    Used for speech-to-text and text-to-speech services.
-    """
-    AWS = 'aws', _('AWS')
-    GCP = 'gcp', _('GCP')
-    AZURE = 'azure', _('Azure')
-    ELEVEN_LABS = 'eleven-labs', _('Eleven Labs')
-
-
-
-class ChatStageChoices(models.TextChoices):
-    """
-    Represents predefined conversational stages in structured chat flows.
-    Used in state-machine based bots to control progression.
-    """
-    WELCOME = 'Welcome_Strand', _('WELCOME_STRAND')
-    ACHIEVEMENT_ORIENTATION = 'Achievement_Orientation', _('ACHIEVEMENT_ORIENTATION')
-    COURAGE = 'Courage_Strand', _('COURAGE_STRAND')
-    CONTINUOUS_LEARNING = 'Continuous_Strand', _('CONTINUOUS_STRAND')
-    CRITICAL_THINKING = 'Critical_Thinking_Strand', _('CRITICAL_THINKING_STRAND')
-    PURPOSE = 'Purpose_Strand', _('PURPOSE_STRAND')
-    THANKYOU = 'Thank_You_Strand', _('THANK_YOU_STRAND')
-    OTHER = 'Other', _('OTHER')
 
 
 class EntityTypeChoices(models.TextChoices):
@@ -368,17 +233,6 @@ class LanguageMapping:
         return cls.get_mapped_language(language_code, region)
 
 
-class PDFStrategyChoices(models.TextChoices):
-    """
-    Lists available PDF generation strategies.
-    Determines rendering engine implementation.
-    """
-    HTMLPDF = 'HTMLPDF', _('HTMLPDF')
-    PUPPETEER = 'PUPPETEER', _('PUPPETEER')
-    HTMLDOCX = 'HTMLDOCX', _('HTMLDOCX')
-    XLSX = 'XLSX', _('XLSX')
-
-
 class SessionFlowName(models.TextChoices):
     """
     Represents predefined session flow identifiers.
@@ -446,25 +300,10 @@ class TextConversionType(models.TextChoices):
     TRANSLITERATE = 'TRANSLITERATE', _('Transliteration')
 
 
-class FileDisplayMode(models.TextChoices):
-    """
-    Controls file visibility scope and permissions.
-    Determines access for UI and AI processing.
-    """
-    VISIBLE = "visible", _("Visible to All")
-    AI_ONLY = "ai_only", _("AI Only (Hidden from UI)")
-    PRIVATE = "private", _("Private (Hidden from UI and AI)")
-
-
 class UserTypeChoices(models.TextChoices):
     GUEST = 'guest', _('Guest')
     AUTH = 'auth', _('Authenticated')
     ALL = 'all', _('All')
-
-
-class LanguageOperationChoices(models.TextChoices):
-    TRANSLATE = 'translate', _('Translate')
-    TRANSLITERATE = 'transliterate', _('Transliterate')
 
 
 class OperationTypeChoices(models.TextChoices):

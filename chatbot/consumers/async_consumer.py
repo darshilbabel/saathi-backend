@@ -5,7 +5,7 @@ from django.conf import settings
 from django.db import transaction
 from chatbot.celery_tasks.common_chat_tasks import save_in_company_db
 from chatbot.consumers.async_base_consumer import AsyncBaseConsumer
-from chatbot.models import ChatStatus, ChatSession, Profile, CompanyBot, Voice, VoiceType, ChatType, CompanyChat, \
+from chatbot.models import ChatStatus, ChatSession, Profile, CompanyBot, Voice, VoiceType, CompanyChat, \
     TextConversionType, CompanyBotTypeChoices
 from chatbot.celery_tasks.flow_tasks import get_flow_response
 from chatbot.models.company_models import CompanyStateMachine
