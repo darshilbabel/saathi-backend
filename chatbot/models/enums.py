@@ -253,19 +253,6 @@ class ChatStageChoices(models.TextChoices):
     OTHER = 'Other', _('OTHER')
 
 
-class StoryLanguageChoices(models.TextChoices):
-    """
-    Lists supported languages for stories.
-    Used for multilingual story management.
-    """
-    ENGLISH = 'en', _('English')
-    HINDI = 'hi', _('Hindi')
-    KANNADA = 'kn', _('Kannada')
-    TELUGU = 'te', _('Telugu')
-    ODIA = 'or', _('Odia')
-    TAMIL = 'ta', _('Tamil')
-
-
 class EntityTypeChoices(models.TextChoices):
     """
     Marks whether an entity is mandatory or optional.

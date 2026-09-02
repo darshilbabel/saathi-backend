@@ -14,10 +14,11 @@ from chatbot.resources.company_resource import ChatSessionResource
 from django.shortcuts import redirect
 from django.contrib import messages
 import logging
+import secrets
 from django.urls import path
 from django.http import HttpResponseRedirect
 from django.urls import reverse
-from django.forms import ModelForm, MultipleChoiceField, CheckboxSelectMultiple, Select
+from django.forms import ModelForm, MultipleChoiceField, ChoiceField, CheckboxSelectMultiple, Select
 from ..utils.admin_config.export_mixin import ExportAllFieldsMixin
 from chatbot.llm_models.llm_gateway import get_provider_list, get_model_list, get_openrouter_endpoints, \
     get_cache_options
@@ -449,6 +450,26 @@ class CompanyBotAdmin(BatchUploadMixin, SimpleHistoryAdmin):
                 )
 
 
+    @staticmethod
+    def _unique_bot_route(company, base_route):
+        """Route CompanyBot.save() now rejects a same-(company, route) duplicate, which
+        `duplicate_bot` below would otherwise always hit since it clones the route
+        verbatim. Suffix with a short random token rather than an incrementing counter
+        (1, 2, 3, ...) — a random suffix needs only one existence check in the
+        overwhelming common case instead of scanning past every prior clone, and the
+        collision odds (1 in 16^8) make the retry loop below a safety net, not the
+        normal path."""
+        if not base_route:
+            return base_route
+        for _ in range(5):
+            candidate = f"{base_route}-copy-{secrets.token_hex(4)}"
+            if not CompanyBot.objects.filter(company=company, route=candidate).exists():
+                return candidate
+        raise ValidationError(
+            f"Could not generate a unique route for a duplicate of {base_route!r} "
+            f"after 5 attempts — this should be virtually impossible; check for a bug."
+        )
+
     def duplicate_bot(self, request, queryset):
         if queryset.count() != 1:
             self.message_user(request, "Please select exactly one bot to duplicate.", level=messages.ERROR)
@@ -460,6 +481,7 @@ class CompanyBotAdmin(BatchUploadMixin, SimpleHistoryAdmin):
         new_bot = CompanyBot.objects.get(pk=original.pk)
         new_bot.pk = None
         new_bot.name = f"{original.name} (Copy)"
+        new_bot.route = self._unique_bot_route(original.company, original.route)
         new_bot.save()
 
         # Duplicate VoiceProvider inlines (including fallback config rows), remapping
@@ -558,6 +580,14 @@ class CompanyChatAdmin(ExportAllFieldsMixin, admin.ModelAdmin):
     resource_class = CompanyChatResource
     extra_export_fields = {
         'session_type': lambda obj: obj.session_type,
+        # chat_import_views.py reads this exact column name back on import (falling
+        # back to the ChatSession model default - English - when absent), so this must
+        # stay in lockstep with that column name. The actual "Export selected records"
+        # button uses ExportAllFieldsMixin.export_all_view (this class isn't an
+        # ImportExportModelAdmin, so resource_class/CompanyChatResource above is unused
+        # by that button) - it reads columns from model fields + extra_export_fields,
+        # not from CompanyChatResource.Meta.fields.
+        'chat_session_language': lambda obj: obj.chat_session_language or '',
     }
 
     def get_queryset(self, request):
@@ -565,7 +595,10 @@ class CompanyChatAdmin(ExportAllFieldsMixin, admin.ModelAdmin):
         qs = qs.annotate(
             session_type=Subquery(
                 ChatSession.objects.filter(session=OuterRef('session')).values('session_type')[:1]
-            )
+            ),
+            chat_session_language=Subquery(
+                ChatSession.objects.filter(session=OuterRef('session')).values('language')[:1]
+            ),
         )
         user_email = request.user.email
         profile = Profile.objects.filter(email=user_email).select_related('company').first()
@@ -577,8 +610,26 @@ class CompanyChatAdmin(ExportAllFieldsMixin, admin.ModelAdmin):
             return qs.none()
 
 
+class ChatSessionAdminForm(ModelForm):
+    language = ChoiceField(
+        help_text="Pick from languages defined under Chatbot > Languages. To add one not "
+                  "listed here, create it there first.",
+    )
+
+    class Meta:
+        model = ChatSession
+        fields = "__all__"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Built fresh per request (not a module-level constant) so a Language added via its
+        # own admin page shows up here immediately, with no code change.
+        self.fields["language"].choices = list(Language.objects.values_list('iso_code', 'name'))
+
+
 @admin.register(ChatSession)
 class ChatSessionAdmin(ExportAllFieldsMixin, admin.ModelAdmin):
+    form = ChatSessionAdminForm
     list_display = (
         'session', 'get_first_name', 'session_status', 'session_type', 'current_question', 'total_steps',
         'created_at', 'updated_at'

@@ -285,6 +285,17 @@ class CompanyBot(models.Model):
         return True
 
     def save(self, *args, **kwargs):
+        duplicate_route = CompanyBot.objects.filter(
+            company=self.company, route=self.route,
+        ).exclude(pk=self.pk).first()
+        if duplicate_route:
+            raise ValidationError(
+                f"A bot with route {self.route!r} already exists for company "
+                f"{self.company} ({duplicate_route}). Routes must be unique per "
+                f"company — lookups like CompanyBot.objects.filter(route=..., "
+                f"company=...).first() silently pick the wrong bot otherwise."
+            )
+
         update_fields = kwargs.get('update_fields')
         reset_fields = set()
         if self._sync_vector_search_tool():

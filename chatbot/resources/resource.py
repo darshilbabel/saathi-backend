@@ -1,7 +1,7 @@
 from import_export.resources import ModelResource
 from import_export.fields import Field
 from import_export.widgets import ForeignKeyWidget
-from chatbot.models import CompanyChat, Profile, Company
+from chatbot.models import CompanyChat, Profile, Company, ChatSession
 from chatbot.models.geo_models import ProfileAddress
 
 
@@ -10,11 +10,26 @@ class CompanyChatResource(ModelResource):
     receiver_name = Field(attribute='receiver__first_name', column_name='Receiver Name')
     sender_phone = Field(attribute='sender__phone', column_name='Sender Phone')
     receiver_phone = Field(attribute='receiver__phone', column_name='Receiver Phone')
+    # chat_import_views.py reads this exact column name back on import (falling back to
+    # the ChatSession model default - English - when the column is absent), so this must
+    # stay in lockstep with that column name.
+    chat_session_language = Field(column_name='chat_session_language')
 
     class Meta:
         model = CompanyChat
         fields = ('message', 'sender_name', 'receiver_name', 'sender_phone', 'receiver_phone',
-                  'session', 'feedback')
+                  'session', 'feedback', 'chat_session_language')
+
+    def dehydrate_chat_session_language(self, obj):
+        # CompanyChat.session is a plain CharField matching ChatSession.session, not an
+        # FK, so this can't be a plain `attribute=` lookup. Cached per distinct session
+        # value (not per row) since many messages share one session.
+        if not hasattr(self, '_session_language_cache'):
+            self._session_language_cache = {}
+        if obj.session not in self._session_language_cache:
+            chat_session = ChatSession.objects.filter(session=obj.session).only('language').first()
+            self._session_language_cache[obj.session] = chat_session.language if chat_session else ''
+        return self._session_language_cache[obj.session]
 
 
 class ProfileResource(ModelResource):
