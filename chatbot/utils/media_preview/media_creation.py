@@ -293,14 +293,17 @@ def render_template_to_pdf(
     Falls back to create_and_upload_file if no template is found.
     """
     from jinja2 import Template
-    from chatbot.models.company_models import Flow, PDFTemplates
+    from chatbot.models.company_models import Flow, MediaTemplate
+    from chatbot.models.enums import MediaTemplateType
     from chatbot.models.chat_models import ChatSession
 
     try:
         print("flow_route: ", flow_name)
         flow = Flow.objects.filter(flow_route=flow_name).first() if flow_name else None
         print("Flow found: ", flow)
-        pdf_template = PDFTemplates.objects.filter(flow=flow).first() if flow else None
+        pdf_template = (
+            MediaTemplate.objects.filter(flow=flow, type=MediaTemplateType.PDF).first() if flow else None
+        )
         print("PDF Template: ", pdf_template)
 
         logger.info(f'[render_template_to_pdf] flow_name={flow_name!r} flow={flow} pdf_template={pdf_template}')
@@ -479,6 +482,91 @@ def create_docx_from_args(
 
     except Exception as e:
         logger.error(f'[create_docx_from_args] Error: {e}', exc_info=True)
+        return {'success': False, 'error': str(e)}
+
+
+def render_docx_from_template(
+    *,
+    flow_name: str,
+    arguments: dict,
+    company_bot_id: int,
+    session_id: str,
+    sources: list = None,
+    language: str = 'en',
+    display_filename: str = None,
+) -> dict:
+    """
+    Look up the MediaTemplate (type=DOCX) for the flow, render it with docxtpl,
+    generate the .docx, and upload to S3. Same (args/constants/language/profile/
+    sources) context shape as render_template_to_pdf, for a consistent
+    templating convention across formats.
+
+    No fallback to create_docx_from_args() if no template is configured for the
+    flow - that function is kept in this module for reference but intentionally
+    no longer called from here.
+    """
+    from io import BytesIO
+    from docxtpl import DocxTemplate
+    from chatbot.models.company_models import Flow, MediaTemplate
+    from chatbot.models.enums import MediaTemplateType
+    from chatbot.models.chat_models import ChatSession
+
+    try:
+        flow = Flow.objects.filter(flow_route=flow_name).first() if flow_name else None
+        docx_template = (
+            MediaTemplate.objects.filter(flow=flow, type=MediaTemplateType.DOCX).first() if flow else None
+        )
+
+        logger.info(f'[render_docx_from_template] flow_name={flow_name!r} flow={flow} docx_template={docx_template}')
+
+        if not docx_template or not docx_template.template_file:
+            logger.info(
+                f'[render_docx_from_template] No DOCX MediaTemplate found for flow_route={flow_name!r}'
+            )
+            return {'success': False, 'error': 'No DOCX template configured for this flow'}
+
+        chat_session = ChatSession.objects.filter(session=session_id).first()
+        profile = chat_session.profile if chat_session else None
+
+        all_constants = docx_template.constants_json or {}
+        lang_constants = all_constants.get(language) or all_constants.get('en') or {}
+
+        template_args = dict(arguments)
+        if display_filename:
+            template_args['filename'] = display_filename
+
+        context = {
+            'args': template_args,
+            'constants': lang_constants,
+            'language': language,
+            'profile': profile,
+            'sources': sources or arguments.get('sources') or [],
+        }
+
+        with docx_template.template_file.open('rb') as f:
+            tpl = DocxTemplate(BytesIO(f.read()))
+        tpl.render(context)
+
+        buf = BytesIO()
+        tpl.save(buf)
+        docx_content = buf.getvalue()
+
+        safe_filename = sanitize_filename(arguments.get('filename', 'download.docx'), '.docx')
+        s3_key = upload_file_to_s3(
+            file_name=safe_filename,
+            file_content=docx_content,
+            content_type=MediaTypeChoices.DOCX,
+            project_id=None,
+            folder_structure=f'chatbot/{company_bot_id}/{session_id}/',
+        )
+
+        if not s3_key:
+            return {'success': False, 'error': 'Failed to upload DOCX to S3'}
+
+        return {'success': True, 'media_url': f'{os.getenv("S3_MEDIA_URL")}{s3_key}', 'file_name': safe_filename}
+
+    except Exception as e:
+        logger.error(f'[render_docx_from_template] Error: {e}', exc_info=True)
         return {'success': False, 'error': str(e)}
 
 

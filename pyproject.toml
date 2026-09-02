@@ -36,6 +36,7 @@ dependencies = [
     "django-tailwind>=4.2.0",
     "djangorestframework>=3.16.1",
     "djangorestframework-simplejwt>=5.5.1",
+    "docxtpl>=0.20.2",
     "google-cloud-speech>=2.36.0",
     "google-cloud-storage>=3.10.1",
     "google-cloud-texttospeech>=2.34.0",

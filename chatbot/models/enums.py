@@ -316,3 +316,8 @@ class WebSearchContextSize(models.TextChoices):
     MEDIUM = 'medium', _('Medium')
     HIGH = 'high', _('High')
 
+
+class MediaTemplateType(models.TextChoices):
+    PDF = 'PDF', _('PDF')
+    DOCX = 'DOCX', _('DOCX')
+

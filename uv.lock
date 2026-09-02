@@ -1171,6 +1171,20 @@ wheels = [
 ]
 
 [[package]]
+name = "docxtpl"
+version = "0.20.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "jinja2" },
+    { name = "lxml" },
+    { name = "python-docx" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b2/b4/4435f3fcb1357ec441079c4af1dda3ea926fad6dcead4aed2d93b369944e/docxtpl-0.20.2.tar.gz", hash = "sha256:eddf3350d70b4d123208e801d585bcb313d21044a377a14f75a66d0965841de1", size = 17890, upload-time = "2025-11-13T12:47:15.943Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a4/ad/e07939d8e020e513d3860400413ba1e0e06102c469639b440d921337efef/docxtpl-0.20.2-py3-none-any.whl", hash = "sha256:626d5c570a46a62b2ca73b4d08f1c240fa031a5bc45371e1466a4fe184923d10", size = 17881, upload-time = "2025-11-13T12:47:13.704Z" },
+]
+
+[[package]]
 name = "et-xmlfile"
 version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4538,6 +4552,7 @@ dependencies = [
     { name = "django-tailwind", version = "4.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "djangorestframework" },
     { name = "djangorestframework-simplejwt" },
+    { name = "docxtpl" },
     { name = "google-cloud-speech" },
     { name = "google-cloud-storage" },
     { name = "google-cloud-texttospeech" },
@@ -4629,6 +4644,7 @@ requires-dist = [
     { name = "django-tailwind", specifier = ">=4.2.0" },
     { name = "djangorestframework", specifier = ">=3.16.1" },
     { name = "djangorestframework-simplejwt", specifier = ">=5.5.1" },
+    { name = "docxtpl", specifier = ">=0.20.2" },
     { name = "google-cloud-speech", specifier = ">=2.36.0" },
     { name = "google-cloud-storage", specifier = ">=3.10.1" },
     { name = "google-cloud-texttospeech", specifier = ">=2.34.0" },

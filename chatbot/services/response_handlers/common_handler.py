@@ -982,7 +982,11 @@ class CommonResponseHandler(BaseResponseHandler):
         # Handle download_file function
         if function_name == 'download_file':
             from chatbot.models.chat_models import ChatSession as _ChatSession
-            from chatbot.utils.media_preview.media_creation import render_template_to_pdf, create_docx_from_args
+            from chatbot.utils.media_preview.media_creation import render_template_to_pdf, render_docx_from_template
+            # create_docx_from_args (hardcoded python-docx generation, no admin template) is kept
+            # in media_creation.py for reference but intentionally no longer used here - DOCX now
+            # always renders through a MediaTemplate(type=DOCX), no fallback to the old logic.
+            # from chatbot.utils.media_preview.media_creation import create_docx_from_args
 
             filename = arguments.get('filename', 'download')
 
@@ -1026,13 +1030,14 @@ class CommonResponseHandler(BaseResponseHandler):
                 language=language,
                 display_filename=translated_filename,
             )
-            docx_result = create_docx_from_args(
+            docx_result = render_docx_from_template(
+                flow_name=flow_name,
                 arguments=arguments,
                 company_bot_id=company_bot.id,
                 session_id=session_id,
                 sources=finalized_sources,
-                flow_name=flow_name,
                 language=language,
+                display_filename=translated_filename,
             )
 
             pdf_url = pdf_result.get('media_url') if pdf_result.get('success') else None
@@ -1050,10 +1055,10 @@ class CommonResponseHandler(BaseResponseHandler):
                     company_bot_id=company_bot.id, session_id=session_id, sources=finalized_sources,
                     language=language, display_filename=translated_filename,
                 )
-                docx_result = create_docx_from_args(
-                    arguments=arguments,
+                docx_result = render_docx_from_template(
+                    flow_name=flow_name, arguments=arguments,
                     company_bot_id=company_bot.id, session_id=session_id, sources=finalized_sources,
-                    flow_name=flow_name, language=language,
+                    language=language, display_filename=translated_filename,
                 )
                 pdf_url = pdf_result.get('media_url') if pdf_result.get('success') else None
                 docx_url = docx_result.get('media_url') if docx_result.get('success') else None

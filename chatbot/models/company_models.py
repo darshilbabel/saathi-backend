@@ -17,7 +17,7 @@ from chatbot.models.enums import (
     FeedbackChoices, CompanyBotTypeChoices, CompanyBotDynamicContextType, CompanyChatSourceChoices,
     VoiceProvider, VoiceType, LLMProvider, EntityTypeChoices, TextConversionType,
     PreProcessType, PreProcessOutputMode, PostProcessType, PostProcessOutputMode,
-    UserTypeChoices, OperationTypeChoices, BotStrategyChoices, WebSearchContextSize
+    UserTypeChoices, OperationTypeChoices, BotStrategyChoices, WebSearchContextSize, MediaTemplateType
 )
 
 S3_BASE_URL = os.getenv('S3_BASE_URL')
@@ -989,4 +989,72 @@ class PDFTemplates(models.Model):
         indexes = [
             models.Index(fields=['template_name']),
             models.Index(fields=['user_type']),
+        ]
+
+
+def get_media_template_upload_path(instance, filename):
+    # Only reachable once `instance.id` exists - the admin only shows/allows
+    # template_file on the change form (after the row's first save with just
+    # flow+type+template_name), never on the initial add form.
+    return f"media_template/{instance.type}/{instance.id}/{filename}"
+
+
+class MediaTemplate(models.Model):
+    """
+    Generalized template for generating a downloadable document (PDF, DOCX, ...)
+    for a flow. One row per (flow, type) - unlike PDFTemplates this covers any
+    output format, since PDF (inline HTML/Jinja2 text) and DOCX (an uploaded
+    .docx file rendered via docxtpl) need structurally different "template"
+    storage. `type` decides which of `template`/`template_file` is used;
+    everything else (constants_json, flow) is shared/format-agnostic.
+    """
+    type = models.CharField(
+        max_length=10,
+        choices=MediaTemplateType.choices,
+        help_text="Output format this template produces."
+    )
+    template_name = models.CharField(
+        max_length=255,
+        unique=True,
+        help_text="Unique name identifier for this template."
+    )
+    flow = models.ForeignKey(
+        Flow,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='media_templates',
+        help_text="Flow associated with this template."
+    )
+    constants_json = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="JSON object containing constants/variables used in the template."
+    )
+    template = models.TextField(
+        null=True,
+        blank=True,
+        help_text="Template content (HTML/Jinja2) - used when type=PDF."
+    )
+    template_file = models.FileField(
+        upload_to=get_media_template_upload_path,
+        max_length=1000,
+        null=True,
+        blank=True,
+        help_text="Uploaded .docx template (Jinja2 tags via docxtpl) - used when type=DOCX."
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    history = HistoricalRecords()
+
+    def __str__(self):
+        return f"{self.template_name} ({self.type})"
+
+    class Meta:
+        verbose_name = "Media Template"
+        verbose_name_plural = "Media Templates"
+        indexes = [
+            models.Index(fields=['template_name']),
+            models.Index(fields=['type']),
         ]
